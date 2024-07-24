@@ -53,6 +53,7 @@ typedef struct {
     InputType type;
 } Input;
 
+bool is_server;
 GameState oldest_game_state;
 GameState latest_game_state;
 
@@ -308,6 +309,44 @@ int entry(int argc, char **argv)
 	window.y = 90;
 	window.clear_color = hex_to_rgba(0x6495EDff);
 
+    string font_file = STR("../assets/Minecraft.ttf");
+    Gfx_Font *font = load_font_from_disk(font_file, get_heap_allocator());
+    if (!font) {
+        printf("Couldn't load font '%s'\n", font_file);
+        abort();
+    }
+
+    /*
+     * Choose between client or server
+     */
+    int choice; // 1=server, 0=client
+    while (!window.should_close) {
+
+        draw_frame.projection = m4_make_orthographic_projection(
+            window.width * -0.5, window.width * 0.5,
+            window.height * -0.5, window.height * 0.5,
+            -1, 10);
+
+		reset_temporary_storage();
+
+        static int cursor = 0;
+        if (is_key_just_pressed(KEY_ARROW_UP) || is_key_just_pressed(KEY_ARROW_DOWN)) cursor = !cursor;
+        if (is_key_just_pressed('A')) { choice = !cursor; break; }
+        draw_text(font, STR("HOST"), 30, v2(10, 100), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("JOIN"), 30, v2(10, 10 ), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
+
+        os_update(); 
+		gfx_update();
+    }
+    printf("%s mode\n", choice ? STR("Server") : STR("Client"));
+    is_server = !!choice;
+
+    if (is_server) {
+        // Wait for other players
+    } else {
+        // Connect to host
+    }
+
 	while (!window.should_close) {
 
         float64 frame_start_time = os_get_current_time_in_seconds();
@@ -335,5 +374,6 @@ int entry(int argc, char **argv)
             os_high_precision_sleep(1000.0F/FPS - elapsed * 1000);
 	}
 
+    destroy_font(font);
 	return 0;
 }
