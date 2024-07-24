@@ -3,10 +3,10 @@
 #define TILE_H 16
 #define WORLD_W 10
 #define WORLD_H 10
-#define MAX_SNAKE_SIZE (WORLD_W * WORLD_H)
 #define MAX_SNAKES 8
 #define MAX_APPLES 4
-#define CEIL(X, Y) (((X) + (Y) - 1) / (Y))
+
+#define MAX_SNAKE_SIZE (WORLD_W * WORLD_H)
 
 typedef enum {
     // Values are chosen such that -d is the direction opposite to d
@@ -55,8 +55,6 @@ typedef struct {
 
 GameState oldest_game_state;
 GameState latest_game_state;
-
-#define COUNTOF(X) (sizeof(X)/sizeof((X)[0]))
 
 void init_game_state(GameState *state)
 {
