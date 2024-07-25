@@ -53,6 +53,7 @@ typedef struct {
     InputType type;
 } Input;
 
+bool multiplayer;
 bool is_server;
 int self_snake_index;
 GameState oldest_game_state;
@@ -332,7 +333,6 @@ int entry(int argc, char **argv)
     /*
      * Choose between client or server
      */
-    int choice; // 1=server, 0=client
     while (!window.should_close) {
 
         draw_frame.projection = m4_make_orthographic_projection(
@@ -343,18 +343,45 @@ int entry(int argc, char **argv)
 		reset_temporary_storage();
 
         static int cursor = 0;
-        if (is_key_just_pressed(KEY_ARROW_UP) || is_key_just_pressed(KEY_ARROW_DOWN)) cursor = !cursor;
-        if (is_key_just_pressed('A')) { choice = !cursor; break; }
-        draw_text(font, STR("HOST"), 30, v2(10, 100), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
-        draw_text(font, STR("JOIN"), 30, v2(10, 10 ), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
 
-        os_update(); 
+        if (is_key_just_pressed(KEY_ARROW_UP))
+            if (cursor > 0) cursor--;
+
+        if (is_key_just_pressed(KEY_ARROW_DOWN))
+            if (cursor < 2) cursor++;
+
+        if (is_key_just_pressed('A')) {
+            switch (cursor) {
+                case 0:
+                is_server = true;
+                multiplayer = false;
+                break;
+                case 1:
+                is_server = true;
+                multiplayer = true;
+                break;
+                case 2:
+                is_server = false;
+                multiplayer = true;
+                break;
+            }
+            break;
+        }
+        draw_text(font, STR("PLAY"), 30, v2(10, 200), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("HOST"), 30, v2(10, 100), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("JOIN"), 30, v2(10, 10 ), v2(1, 1), cursor == 2 ? COLOR_RED : COLOR_BLACK);
+
+        os_update();
 		gfx_update();
     }
-    printf("%s mode\n", choice ? STR("Server") : STR("Client"));
-    is_server = !!choice;
 
-    if (is_server) {
+    if (!multiplayer) {
+
+        printf("Single player mode\n");
+        self_snake_index = 0;
+        create_snake(&latest_game_state.snakes[0], get_random() % WORLD_W, get_random() % WORLD_H);
+
+    } else if (is_server) {
         // Listen for connections
         server_handle = tcp_server_create(STR(""), TCP_PORT, MAX_SNAKES);
         if (server_handle == TCP_INVALID) {
@@ -368,6 +395,8 @@ int entry(int argc, char **argv)
         // Wait for other players
         bool all_players_connected = false;
         while (!all_players_connected && !window.should_close) {
+
+            reset_temporary_storage();
 
             printf(".. Waiting for connections ..\n");
             tcp_server_poll(server_handle, 1000.0/FPS); // TODO: Wait until timeout
@@ -461,6 +490,8 @@ int entry(int argc, char **argv)
         int num_snakes = 0;
         for (bool done = false; !done && !window.should_close; ) {
 
+            reset_temporary_storage();
+
             printf(".. Waiting game state ..\n");
             tcp_client_poll(server_handle, 1000.0/FPS);
 
@@ -510,9 +541,8 @@ int entry(int argc, char **argv)
                         abort();
                     }
                     self_snake_index = (int) buffer;
-
                 }
-                
+
                 if (num_snakes > 0) {
                     printf("Got %d bytes, expected %d\n",
                         input.count, num_snakes * sizeof(u32) * 2);
@@ -554,7 +584,16 @@ int entry(int argc, char **argv)
 
         float64 frame_start_time = os_get_current_time_in_seconds();
 
-        if (is_server) {
+        reset_temporary_storage();
+
+        if (!multiplayer) {
+
+            if (is_key_just_pressed(KEY_ARROW_UP))    change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_UP);
+            if (is_key_just_pressed(KEY_ARROW_DOWN))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_DOWN);
+            if (is_key_just_pressed(KEY_ARROW_LEFT))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_LEFT);
+            if (is_key_just_pressed(KEY_ARROW_RIGHT)) change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_RIGHT);
+        
+        } else if (is_server) {
             tcp_server_poll(server_handle, 0);
             for (;;) {
                 TCPEvent event = tcp_server_event(server_handle);
@@ -576,13 +615,6 @@ int entry(int argc, char **argv)
             window.width * -0.5, window.width * 0.5,
             window.height * -0.5, window.height * 0.5,
             -1, 10);
-
-		reset_temporary_storage();
-
-        if (is_key_just_pressed(KEY_ARROW_UP))    change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_UP);
-        if (is_key_just_pressed(KEY_ARROW_DOWN))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_DOWN);
-        if (is_key_just_pressed(KEY_ARROW_LEFT))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_LEFT);
-        if (is_key_just_pressed(KEY_ARROW_RIGHT)) change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_RIGHT);
 
         update_game_state(&latest_game_state);
         draw_game_state(&latest_game_state);
