@@ -5,7 +5,7 @@
             "name": "Launch Debug with MSVC Debugger",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/cgame.exe", // Run the output executable after compile
+            "program": "${workspaceFolder}/cgame.exe", // Run the output executable after compile
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -17,7 +17,7 @@
             "name": "Launch Release with MSVC Debugger",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/release/cgame.exe", // Run the output executable after compile
+            "program": "${workspaceFolder}/release/cgame.exe", // Run the output executable after compile
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

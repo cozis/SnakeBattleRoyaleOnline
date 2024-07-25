@@ -420,37 +420,34 @@ void connecting_loop(void)
 
                 if (input.count < 2 * sizeof(u32))
                     continue;
-                u32 buffer;
+                u32 buffer0;
+                u32 buffer1;
 
-                // Get snake count
-                memcpy(&buffer, input.data, sizeof(u32));
-                tcp_client_read(server_handle, sizeof(u32));
-                buffer = ntohl(buffer);
-                printf("num_snakes=%lu\n", buffer);
-                if (buffer > MAX_SNAKES) {
+                // Get snake count and client index
+                memcpy(&buffer0, input.data + 0, sizeof(u32));
+                memcpy(&buffer1, input.data + 4, sizeof(u32));
+                tcp_client_read(server_handle, 2 * sizeof(u32));
+                buffer0 = ntohl(buffer0);
+                buffer1 = ntohl(buffer1);
+
+                printf("num_snakes=%lu\n", buffer0);
+                printf("self_snake_index=%lu\n", buffer1);
+                
+                if (buffer0 > MAX_SNAKES || buffer1 >= buffer0) {
                     // TODO
                     abort();
                 }
-                num_snakes = (int) buffer;
-
-                // Get our index
-                memcpy(&buffer, input.data, sizeof(u32));
-                tcp_client_read(server_handle, sizeof(u32));
-                buffer = ntohl(buffer);
-                printf("self_snake_index=%lu\n", buffer);
-                if (buffer >= num_snakes) {
-                    // TODO
-                    abort();
-                }
-                self_snake_index = (int) buffer;
+                num_snakes       = (int) buffer0;
+                self_snake_index = (int) buffer1;
             }
 
             if (num_snakes > 0) {
-                printf("Got %d bytes, expected %d\n",
-                    input.count, num_snakes * sizeof(u32) * 2);
+
                 if (input.count < num_snakes * sizeof(u32) * 2)
                     continue;
                 for (int i = 0; i < num_snakes; i++) {
+
+                    input = tcp_client_get_input(server_handle);
 
                     u32 head_x;
                     u32 head_y;
@@ -575,15 +572,18 @@ void wait_for_players_loop(void)
         tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
 
         // Send the player information
-        for (int j = 0; j < MAX_SNAKES; j++) {
-            Snake *s = &latest_game_state.snakes[j];
-            
+        for (int k = 0; k < MAX_SNAKES; k++) {
+            Snake *s = &latest_game_state.snakes[k];
+            if (!s->used) continue;
+
+            printf("sending head_x=%d, head_y=%d\n", s->head_x, s->head_y);
+
             buffer = htonl(s->head_x);
             tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
-            
+
             buffer = htonl(s->head_y);
             tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
-            
+
             assert(s->body_len == 0); // We are assuming the starting size is 0. If that
                                         // wasn't the case we would need to send the body
         }
