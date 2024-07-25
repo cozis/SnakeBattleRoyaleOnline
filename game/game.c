@@ -611,6 +611,7 @@ int entry(int argc, char **argv)
             }
         }
 
+
         draw_frame.projection = m4_make_orthographic_projection(
             window.width * -0.5, window.width * 0.5,
             window.height * -0.5, window.height * 0.5,
