@@ -486,7 +486,7 @@ static bool move_bytes_from_queue_to_socket(int fd, ByteQueue *queue)
     return true;
 }
 
-void tcp_server_poll(TCPHandle handle)
+void tcp_server_poll(TCPHandle handle, int timeout)
 {
     TCPServer *server = server_from_handle(handle);
     if (server == NULL) abort();
@@ -539,7 +539,7 @@ void tcp_server_poll(TCPHandle handle)
         poll_count++;
     }
 
-    int n = poll(poll_array, poll_count, 0);
+    int n = poll(poll_array, poll_count, timeout);
     if (n == 0) return;
 
     /*
