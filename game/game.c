@@ -317,8 +317,8 @@ int entry(int argc, char **argv)
     init_game_state(&latest_game_state);
 
 	window.title = STR("Snake Battle Royale");
-	window.scaled_width = 1280; // We need to set the scaled size if we want to handle system scaling (DPI)
-	window.scaled_height = 720; 
+	window.scaled_width = 1280/4; // We need to set the scaled size if we want to handle system scaling (DPI)
+	window.scaled_height = 720/4;
 	window.x = 200;
 	window.y = 90;
 	window.clear_color = hex_to_rgba(0x6495EDff);
@@ -335,12 +335,9 @@ int entry(int argc, char **argv)
      */
     while (!window.should_close) {
 
-        draw_frame.projection = m4_make_orthographic_projection(
-            window.width * -0.5, window.width * 0.5,
-            window.height * -0.5, window.height * 0.5,
-            -1, 10);
-
 		reset_temporary_storage();
+
+        draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
         static int cursor = 0;
 
@@ -367,9 +364,9 @@ int entry(int argc, char **argv)
             }
             break;
         }
-        draw_text(font, STR("PLAY"), 30, v2(10, 200), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
-        draw_text(font, STR("HOST"), 30, v2(10, 100), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
-        draw_text(font, STR("JOIN"), 30, v2(10, 10 ), v2(1, 1), cursor == 2 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("PLAY"), 30, v2(30, 200), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("HOST"), 30, v2(30, 100), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
+        draw_text(font, STR("JOIN"), 30, v2(30,   0), v2(1, 1), cursor == 2 ? COLOR_RED : COLOR_BLACK);
 
         os_update();
 		gfx_update();
@@ -397,6 +394,18 @@ int entry(int argc, char **argv)
         while (!all_players_connected && !window.should_close) {
 
             reset_temporary_storage();
+
+            draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
+
+            static int dots = 0;
+            string text;
+            switch (dots) {
+                case 0: text = STR("Waiting for players");     dots++;   break;
+                case 1: text = STR("Waiting for players .");   dots++;   break;
+                case 2: text = STR("Waiting for players ..");  dots++;   break;
+                case 3: text = STR("Waiting for players ..."); dots = 0; break;
+            }
+            draw_text(font, text, 30, v2(30, 30), v2(1, 1), COLOR_BLACK);
 
             printf(".. Waiting for connections ..\n");
             tcp_server_poll(server_handle, 1000.0/FPS); // TODO: Wait until timeout
@@ -492,6 +501,8 @@ int entry(int argc, char **argv)
 
             reset_temporary_storage();
 
+            draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
+
             printf(".. Waiting game state ..\n");
             tcp_client_poll(server_handle, 1000.0/FPS);
 
@@ -586,6 +597,8 @@ int entry(int argc, char **argv)
 
         reset_temporary_storage();
 
+        draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
+
         if (!multiplayer) {
 
             if (is_key_just_pressed(KEY_ARROW_UP))    change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_UP);
@@ -610,12 +623,6 @@ int entry(int argc, char **argv)
                 // TODO
             }
         }
-
-
-        draw_frame.projection = m4_make_orthographic_projection(
-            window.width * -0.5, window.width * 0.5,
-            window.height * -0.5, window.height * 0.5,
-            -1, 10);
 
         update_game_state(&latest_game_state);
         draw_game_state(&latest_game_state);
