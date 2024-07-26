@@ -49,6 +49,16 @@ typedef struct {
     bool disconnect;
 } Input;
 
+/*
+ * FIXME: The way we avoid snakes changing direction to the one opposite
+ *        to movement is to check that the new direction is not.. opposite
+ *        to the movement. The problem is, players can change direction
+ *        multiple times per frame with only the last one taking effect.
+ *        This makes it possible to change from the current direction to
+ *        and ortogonal one and then to the opposite direction to the initial
+ *        one. This should not happen.
+ */
+
 bool multiplayer;
 bool is_server;
 int self_snake_index;
