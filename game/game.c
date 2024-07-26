@@ -423,7 +423,26 @@ void recalculate_latest_state(void)
 
 void draw_game_state(GameState *game)
 {
-    draw_rect(v2(0, 0), v2(WORLD_W*TILE_W, WORLD_H*TILE_H), COLOR_WHITE);
+    float pad_x = 50;
+    float pad_y = 20;
+    float nopad_window_w = window.width  - 2 * pad_x;
+    float nopad_window_h = window.height - 2 * pad_y;
+
+    float scale;
+    {
+        float scale_x = nopad_window_w / (WORLD_W * TILE_W);
+        float scale_y = nopad_window_h / (WORLD_H * TILE_H);
+        scale = MIN(scale_x, scale_y);
+    }
+
+    float px_world_w = scale * WORLD_W * TILE_W;
+    float px_world_h = scale * WORLD_H * TILE_H;
+
+    // Offsets needed to center stuff
+    float offset_x = (window.width  - px_world_w) / 2;
+    float offset_y = (window.height - px_world_h) / 2;
+
+    draw_rect(v2(offset_x, offset_y), v2(px_world_w, px_world_h), COLOR_WHITE);
 
     for (int i = 0; i < MAX_SNAKES; i++) {
 
@@ -432,13 +451,13 @@ void draw_game_state(GameState *game)
 
         start_iter_over_snake(s);
         for (u32 x, y; next_snake_body_part(s, &x, &y); )
-            draw_rect(v2(x * TILE_W, y * TILE_H), v2(TILE_W, TILE_H), COLOR_GREEN);
+            draw_rect(v2(offset_x + x * scale * TILE_W, offset_y + y * scale * TILE_H), v2(scale * TILE_W, scale * TILE_H), COLOR_GREEN);
     }
 
     for (int i = 0; i < MAX_APPLES; i++) {
         Apple *a = &game->apples[i];
         if (a->used)
-            draw_rect(v2(a->x * TILE_W, a->y * TILE_H), v2(TILE_W, TILE_H), COLOR_RED);
+            draw_rect(v2(offset_x + a->x * scale * TILE_W, offset_y + a->y * scale * TILE_H), v2(scale * TILE_W, scale * TILE_H), COLOR_RED);
     }
 }
 
