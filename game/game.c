@@ -9,7 +9,7 @@
 #define MAX_SNAKE_SIZE (WORLD_W * WORLD_H)
 
 typedef enum {
-    // Values are chosen such that -d is the direction opposite to d
+    // Value are chosen such that -d is the direction opposite to d
     DIR_UP    = +1,
     DIR_DOWN  = -1,
     DIR_LEFT  = +2,
@@ -37,20 +37,16 @@ typedef struct {
 
 typedef struct {
     u64 frame_index;
+    u64 seed;
     Snake snakes[MAX_SNAKES];
     Apple apples[MAX_APPLES];
 } GameState;
 
-typedef enum {
-    INPUT_UP,
-    INPUT_DOWN,
-    INPUT_LEFT,
-    INPUT_RIGHT,
-    INPUT_CONNECT,
-} InputType;
-
 typedef struct {
-    InputType type;
+    u64 time;
+    u32 player;
+    Direction dir;
+    bool disconnect;
 } Input;
 
 bool multiplayer;
@@ -59,13 +55,69 @@ int self_snake_index;
 GameState oldest_game_state;
 GameState latest_game_state;
 
+#define MAX_INPUTS_LOG2 10
+#define MAX_INPUTS (1 << MAX_INPUTS_LOG2)
+#define INPUTS_MASK (MAX_INPUTS-1)
+Input inputs[MAX_INPUTS];
+int inputs_head;
+int inputs_count;
+
 TCPHandle server_handle;
 TCPHandle client_handles[MAX_SNAKES-1]; // -1 because the host doesn't need one
 
 Gfx_Font *font;
 
+void push_input_struct_to_queue(Input input)
+{
+    if (inputs_count == MAX_INPUTS) {
+        printf("Input queue is full\n");
+        abort();
+    }
+
+    if (input.time < oldest_game_state.frame_index) {
+        printf("Input is too old\n");
+        abort();
+    }
+
+    // Find the first entry that is older from the tail
+    // (Here by tail we mean the last element, not the
+    // first free slot).
+    uint64_t i = (uint64_t) inputs_count - 1;
+    while (i != (uint64_t) -1 && input.time < inputs[(inputs_head + i) & INPUTS_MASK].time) {
+        i--;
+    }
+    i++;
+    // i here is the insert position
+
+    for (uint64_t j = inputs_count; j > i; j--)
+        inputs[(inputs_head + j) & INPUTS_MASK] = inputs[(inputs_head + j - 1) & INPUTS_MASK];
+
+    inputs[(inputs_head + i) & INPUTS_MASK] = input;
+    inputs_count++;
+}
+
+void push_disconnect_input_to_queue(u32 player, u64 time)
+{
+    Input input;
+    input.disconnect = true;
+    input.time = time;
+    input.player = player;
+    push_input_struct_to_queue(input);
+}
+
+void push_direction_input_to_queue(Direction dir, u32 player, u64 time)
+{
+    Input input;
+    input.disconnect = false;
+    input.dir = dir;
+    input.time = time;
+    input.player = player;
+    push_input_struct_to_queue(input);
+}
+
 void init_game_state(GameState *state)
 {
+    state->seed = 1;
     state->frame_index = 0;
     for (int i = 0; i < MAX_SNAKES; i++)
         state->snakes[i].used = false;
@@ -222,11 +274,17 @@ bool location_occupied_by_snake_or_apple(GameState *game, u32 x, u32 y)
     return false;
 }
 
+u64 get_random_from_game(GameState *game)
+{
+    game->seed = next_random(game->seed);
+    return game->seed;
+}
+
 void choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
 {
     for (int i = 0; i < 1000; i++) {
-        u32 x = get_random() % WORLD_W;
-        u32 y = get_random() % WORLD_H;
+        u32 x = get_random_from_game(game) % WORLD_W;
+        u32 y = get_random_from_game(game) % WORLD_H;
         if (!location_occupied_by_snake_or_apple(game, x, y)) {
             if (out_x) *out_x = x;
             if (out_y) *out_y = y;
@@ -276,6 +334,83 @@ void update_game_state(GameState *game)
     game->frame_index++;
 }
 
+bool pop_input_from_queue(Input *input)
+{
+    if (inputs_count == 0)
+        return false;
+    *input = inputs[inputs_head];
+    inputs_head = (inputs_head + 1) & INPUTS_MASK;
+    inputs_count--;
+    return true;
+}
+
+bool peek_input_from_queue(u32 index, Input *input)
+{
+    if (inputs_count <= index)
+        return false;
+    *input = inputs[(inputs_head + index) & INPUTS_MASK];
+    return true;
+}
+
+void apply_inputs_until_time(GameState *game_state, uint64_t frame_index_limit, bool pop)
+{
+    uint64_t last_frame_index = game_state->frame_index;
+    u32 cursor = 0;
+
+    for (;;) {
+
+        Input input;
+        bool done = !peek_input_from_queue(cursor, &input);
+        if (done || input.time > frame_index_limit) break;
+
+        if (pop)
+            pop_input_from_queue(&input);
+        else {
+            cursor++;
+        }
+
+        assert(last_frame_index <= input.time);
+        while (last_frame_index < input.time) {
+            update_game_state(game_state);
+            last_frame_index++;
+        }
+
+        assert(game_state->snakes[input.player].used == true);
+
+        if (input.disconnect) {
+            game_state->snakes[input.player].used = false;
+        } else {
+            switch (input.dir) {
+                case DIR_UP   : change_snake_direction(&game_state->snakes[input.player], DIR_UP);    break;
+                case DIR_DOWN : change_snake_direction(&game_state->snakes[input.player], DIR_DOWN);  break;
+                case DIR_LEFT : change_snake_direction(&game_state->snakes[input.player], DIR_LEFT);  break;
+                case DIR_RIGHT: change_snake_direction(&game_state->snakes[input.player], DIR_RIGHT); break;
+            }
+        }
+
+    }
+
+    while (last_frame_index < frame_index_limit) {
+        update_game_state(game_state);
+        last_frame_index++;
+    }
+}
+
+void recalculate_latest_state(void)
+{
+    u64 lookback = 8;
+
+    u64 latest_frame_index = latest_game_state.frame_index;
+
+    // Apply old inputs permanently
+    if (latest_frame_index >= lookback)
+        apply_inputs_until_time(&oldest_game_state, latest_frame_index - lookback, true);
+
+    // Apply newer inputs
+    memcpy(&latest_game_state, &oldest_game_state, sizeof(GameState));
+    apply_inputs_until_time(&latest_game_state, latest_frame_index, false);
+}
+
 void draw_game_state(GameState *game)
 {
     draw_rect(v2(0, 0), v2(WORLD_W*TILE_W, WORLD_H*TILE_H), COLOR_WHITE);
@@ -308,49 +443,163 @@ int count_snakes(GameState *game)
 
 void init_globals(void)
 {
+    inputs_head = 0;
+    inputs_count = 0;
     server_handle = TCP_INVALID;
     for (int i = 0; i < MAX_SNAKES-1; i++)
         client_handles[i] = TCP_INVALID;
 }
 
-void process_player_inputs(void)
+void apply_local_input(Direction dir)
 {
     if (!multiplayer) {
-        
-        /*
-         * !! Single Player !!
-         */
-
-        if (is_key_just_pressed(KEY_ARROW_UP))    change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_UP);
-        if (is_key_just_pressed(KEY_ARROW_DOWN))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_DOWN);
-        if (is_key_just_pressed(KEY_ARROW_LEFT))  change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_LEFT);
-        if (is_key_just_pressed(KEY_ARROW_RIGHT)) change_snake_direction(&latest_game_state.snakes[self_snake_index], DIR_RIGHT);
-    
+        change_snake_direction(&latest_game_state.snakes[self_snake_index], dir);
     } else if (is_server) {
+        u32 id = htonl(self_snake_index);
+        u32 msg = htonl(dir);
+        u64 time = htonll(latest_game_state.frame_index);
+        for (u32 i = 0; i < MAX_SNAKES-1; i++) {
+            if (client_handles[i] != TCP_INVALID) {
+                tcp_client_write(client_handles[i], &time, sizeof(time));
+                tcp_client_write(client_handles[i], &id, sizeof(id));
+                tcp_client_write(client_handles[i], &msg, sizeof(msg));
+            }
+        }
+        push_direction_input_to_queue(dir, self_snake_index, latest_game_state.frame_index);
+        change_snake_direction(&latest_game_state.snakes[self_snake_index], dir);
+    } else {
+        u64 time = htonll(latest_game_state.frame_index);
+        u32 msg = htonl(dir);
+        tcp_client_write(server_handle, &time, sizeof(time));
+        tcp_client_write(server_handle, &msg, sizeof(msg));
+        push_direction_input_to_queue(dir, self_snake_index, latest_game_state.frame_index);
+        change_snake_direction(&latest_game_state.snakes[self_snake_index], dir);
+    }
+}
 
-        /*
-         * !! Server Player !!
-         */
+void apply_remote_input(Direction dir, u32 player, u64 time)
+{
+    assert(multiplayer);
+
+    if (is_server) {
+
+        push_direction_input_to_queue(dir, player, time);
+
+        time = htonll(time);
+        u32 dir2 = htonl(dir);
+        u32 id = htonl(player);
+
+        // Relay the input to all other players
+        for (int i = 0; i < MAX_SNAKES-1; i++) {
+            if (client_handles[i] != TCP_INVALID && i != player-1) {
+                tcp_client_write(client_handles[i], &time, sizeof(time));
+                tcp_client_write(client_handles[i], &id, sizeof(id));
+                tcp_client_write(client_handles[i], &dir2, sizeof(dir2));
+            }
+        }
+
+    } else {
+
+        push_direction_input_to_queue(dir, player, time);
+    }
+}
+
+void process_player_inputs(void)
+{
+    if (is_key_just_pressed(KEY_ARROW_UP))    apply_local_input(DIR_UP);
+    if (is_key_just_pressed(KEY_ARROW_DOWN))  apply_local_input(DIR_DOWN);
+    if (is_key_just_pressed(KEY_ARROW_LEFT))  apply_local_input(DIR_LEFT);
+    if (is_key_just_pressed(KEY_ARROW_RIGHT)) apply_local_input(DIR_RIGHT);
+
+    if (!multiplayer)
+        return;
+    
+    if (is_server) {
 
         tcp_server_poll(server_handle, 0);
         for (;;) {
             TCPEvent event = tcp_server_event(server_handle);
             if (event.type == TCP_EVENT_NONE) break;
 
-            // TODO
+            if (event.type == TCP_EVENT_CONNECT) {
+                tcp_client_close(event.handle);
+                continue;
+            }
+
+            if (event.type == TCP_EVENT_DISCONNECT) {
+                int i = 0;
+                while (client_handles[i] != event.handle) {
+                    i++;
+                    assert(i < MAX_SNAKES-1);
+                }
+                latest_game_state.snakes[i+1].used = false;
+                tcp_client_close(client_handles[i]);
+                client_handles[i] = TCP_INVALID;
+                push_disconnect_input_to_queue(i, latest_game_state.frame_index);
+                continue;
+            }
+
+            assert(event.type == TCP_EVENT_DATA);
+
+            // Get the snake
+            int i = 0;
+            while (client_handles[i] != event.handle) {
+                i++;
+                assert(i < MAX_SNAKES-1);
+            }
+            i++;
+
+            string input = tcp_client_get_input(event.handle);
+            while (input.count >= sizeof(u64) + sizeof(u32)) {
+
+                u32 value;
+                u64 time;
+                memcpy(&time,  input.data + 0, sizeof(u64));
+                memcpy(&value, input.data + 8, sizeof(u32));
+                tcp_client_read(event.handle, sizeof(u64) + sizeof(u32));
+                Direction dir = ntohl(value);
+                time = ntohll(time);
+
+                apply_remote_input(dir, i, time);
+                input = tcp_client_get_input(event.handle);
+            }
         }
     } else {
-
-        /*
-         * !! Client Player !!
-         */
 
         tcp_client_poll(server_handle, 0);
         for (;;) {
             TCPEvent event = tcp_client_event(server_handle);
             if (event.type == TCP_EVENT_NONE) break;
 
-            // TODO
+            if (event.type == TCP_EVENT_DISCONNECT) {
+                printf("Server disconnected\n");
+                abort();
+            }
+
+            assert(event.type == TCP_EVENT_DATA);
+
+            string input = tcp_client_get_input(event.handle);
+            while (input.count >= 2 * sizeof(u32) + sizeof(u64)) {
+
+                u64 time;
+                u32 buffer0;
+                u32 buffer1;
+                memcpy(&time,    input.data + 0, sizeof(u64));
+                memcpy(&buffer0, input.data + 8, sizeof(u32));
+                memcpy(&buffer1, input.data + 12, sizeof(u32));
+                tcp_client_read(event.handle, 2 * sizeof(u32) + sizeof(u64));
+
+                time = ntohll(time);
+                u32 id = ntohl(buffer0);
+                Direction dir = ntohl(buffer1);
+
+                // TODO: Validate the ID
+                assert(id < MAX_SNAKES && latest_game_state.snakes[id].used);
+
+                apply_remote_input(dir, id, time);
+
+                input = tcp_client_get_input(event.handle);
+            }
         }
     }
 }
@@ -538,6 +787,7 @@ void wait_for_players_loop(void)
                 client_handles[i] = TCP_INVALID;
                 tcp_client_close(event.handle);
                 printf("Player disconnected\n");
+                continue;
             }
 
             if (event.type == TCP_EVENT_DATA) {
@@ -556,12 +806,34 @@ void wait_for_players_loop(void)
 
     printf("Ready to play!\n");
 
+    // Compact snake structs so that their layout is the
+    // same as the client's. Note that the first struct is
+    // always occupied by the master
+    int free_slots[MAX_SNAKES];
+    int free_slots_head = 0;
+    int free_slots_count = 0;
+    for (int i = 0; i < MAX_SNAKES; i++) {
+        if (latest_game_state.snakes[i].used && free_slots_count > 0) {
+            int k = free_slots[free_slots_head];
+            free_slots_head++;
+            free_slots_count--;
+            client_handles[k-1] = client_handles[i-1];
+            client_handles[i-1] = TCP_INVALID;
+            latest_game_state.snakes[k] = latest_game_state.snakes[i];
+            latest_game_state.snakes[i].used = false;
+        }
+        if (!latest_game_state.snakes[i].used) {
+            free_slots[free_slots_head + free_slots_count] = i;
+            free_slots_count++;
+        }
+    }
+
     // Send player positions to the clients
     int num_snakes = count_snakes(&latest_game_state);
-    for (int i = 0, j = 0; i < MAX_SNAKES-1; i++) {
+    for (int i = 0, j = 1; i < MAX_SNAKES-1; i++) {
         if (client_handles[i] == TCP_INVALID)
             continue;
-        uint32_t buffer;
+        u32 buffer;
 
         // Send the player count
         buffer = htonl(num_snakes);
@@ -590,6 +862,11 @@ void wait_for_players_loop(void)
 
         j++;
     }
+}
+
+bool we_are_dead(void)
+{
+    return !latest_game_state.snakes[self_snake_index].used;
 }
 
 int entry(int argc, char **argv)
@@ -674,7 +951,12 @@ int entry(int argc, char **argv)
         draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
         process_player_inputs();
+        if (multiplayer)
+            recalculate_latest_state();
         update_game_state(&latest_game_state);
+        if (we_are_dead()) {
+            // We're dead x_x
+        }
         draw_game_state(&latest_game_state);
 
 		os_update(); 

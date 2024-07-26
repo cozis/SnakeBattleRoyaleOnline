@@ -13,8 +13,12 @@ ogb_instance u64 seed_for_random;
 u64 seed_for_random = 1;
 #endif
 
+u64 next_random(u64 value) {
+    return value * MULTIPLIER + INCREMENT;
+}
+
 u64 get_random() {
-    seed_for_random = seed_for_random * MULTIPLIER + INCREMENT;
+    seed_for_random = next_random(seed_for_random);
     return seed_for_random;
 }
 
