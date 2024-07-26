@@ -1,4 +1,5 @@
-#define FPS 5
+
+#define FPS 10
 #define TILE_W 16
 #define TILE_H 16
 #define WORLD_W 30
@@ -77,6 +78,24 @@ TCPHandle client_handles[MAX_SNAKES-1]; // -1 because the host doesn't need one
 
 Gfx_Font *font;
 
+Audio_Player *song_player;
+Audio_Player *effects_player;
+
+Audio_Source song;
+Audio_Source eat_sound;
+
+bool apple_consumed_this_frame;
+
+bool show_menu_box;
+float target_menu_box_x;
+float target_menu_box_y;
+float target_menu_box_w;
+float target_menu_box_h;
+float menu_box_x;
+float menu_box_y;
+float menu_box_w;
+float menu_box_h;
+
 void push_input_struct_to_queue(Input input)
 {
     if (inputs_count == MAX_INPUTS) {
@@ -123,6 +142,21 @@ void push_direction_input_to_queue(Direction dir, u32 player, u64 time)
     input.time = time;
     input.player = player;
     push_input_struct_to_queue(input);
+}
+
+bool almost_equals(float a, float b, float epsilon)
+{
+    return fabs(a - b) <= epsilon;
+}
+
+bool animate_f32_to_target(float* value, float target, float delta_t, float rate)
+{
+	*value += (target - *value) * (1.0 - pow(2.0f, -rate * delta_t));
+	if (almost_equals(*value, target, 0.001f)) {
+		*value = target;
+		return true; // reached
+	}
+	return false;
 }
 
 void init_game_state(GameState *state)
@@ -214,6 +248,7 @@ bool consume_apple_at(Apple *apples, u32 x, u32 y)
     while (i < MAX_APPLES) {
         if (apples[i].used && apples[i].x == x && apples[i].y == y) {
             apples[i].used = false;
+            apple_consumed_this_frame = true;
             return true;
         }
         i++;
@@ -480,6 +515,7 @@ int count_snakes(GameState *game)
 
 void init_globals(void)
 {
+    show_menu_box = false;
     inputs_head = 0;
     inputs_count = 0;
     server_handle = TCP_INVALID;
@@ -643,13 +679,13 @@ void process_player_inputs(void)
     }
 }
 
-void cleanup_network_resources()
+void cleanup_network_resources_if_any()
 {
     if (!multiplayer)
         return;
     
     if (is_server) {
-        for (int i = 0; i < MAX_SNAKES; i++)
+        for (int i = 0; i < MAX_SNAKES-1; i++)
             if (client_handles[i] != TCP_INVALID) {
                 tcp_client_close(client_handles[i]);
                 client_handles[i] = TCP_INVALID;
@@ -662,188 +698,240 @@ void cleanup_network_resources()
     }
 }
 
-void connecting_loop(void)
+typedef enum {
+    VIEW_MAIN_MENU,
+    VIEW_WAITING_FOR_PLAYERS,
+    VIEW_CONNECTING,
+    VIEW_SINGLE_PLAYER,
+    VIEW_SINGLE_PLAYER_YOU_DIED,
+    VIEW_MULTI_PLAYER,
+    VIEW_COULDNT_HOST_GAME,
+    VIEW_COULDNT_CONNECT,
+    VIEW_INVALID_SERVER_RESPONSE,
+    VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY,
+} ViewID;
+
+ViewID current_view = VIEW_MAIN_MENU;
+
+#define LIT(s) (string) {.count=sizeof(s)-1, .data=(u8*)(s)}
+
+void main_menu_loop(void)
 {
-    assert(multiplayer && !is_server);
+    show_menu_box = true;
 
-    // Connect to host
-    server_handle = tcp_client_create(STR("127.0.0.1"), TCP_PORT);
-    if (server_handle == TCP_INVALID) {
-        printf("Couldn't connect to the server\n");
-        abort();
+    typedef struct {
+        string text;
+        float x;
+        float y;
+        float w;
+        float h;
+    } MainMenuEntry;
+
+    static MainMenuEntry entries[] = {
+        {.text=LIT("PLAY")},
+        {.text=LIT("HOST")},
+        {.text=LIT("JOIN")},
+        {.text=LIT("EXIT")},
+    };
+
+    static int cursor = 0;
+
+    int pad_y = 30;
+    int text_h = 40;
+
+    Gfx_Text_Metrics metrics;
+
+    for (int i = 0; i < COUNTOF(entries); i++) {
+        Gfx_Text_Metrics metrics = measure_text(font, entries[i].text, text_h, v2(1, 1));
+        entries[i].w = metrics.visual_size.x;
+        entries[i].h = metrics.visual_size.y;
     }
-    printf("Connected!\n");
 
-    // Receive starting state
-    int num_snakes = 0;
-    for (bool done = false; !done && !window.should_close; ) {
-
-        reset_temporary_storage();
-
-        draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
-
-        printf(".. Waiting game state ..\n");
-        tcp_client_poll(server_handle, 1000.0/FPS);
-
-        do {
-            TCPEvent event = tcp_client_event(server_handle);
-            printf("Event!\n");
-
-            if (event.type == TCP_EVENT_NONE) {
-                printf("It's none :/\n");
-                break;
-            }
-
-            if (event.type == TCP_EVENT_DISCONNECT) {
-                printf("Server disconnected unexpectedly\n");
-                abort();
-            }
-
-            assert(event.type == TCP_EVENT_DATA);
-            printf("Got some data!\n");
-            
-            string input = tcp_client_get_input(server_handle);
-
-            if (num_snakes == 0) {
-
-                if (input.count < 2 * sizeof(u32))
-                    continue;
-                u32 buffer0;
-                u32 buffer1;
-
-                // Get snake count and client index
-                memcpy(&buffer0, input.data + 0, sizeof(u32));
-                memcpy(&buffer1, input.data + 4, sizeof(u32));
-                tcp_client_read(server_handle, 2 * sizeof(u32));
-                buffer0 = ntohl(buffer0);
-                buffer1 = ntohl(buffer1);
-
-                printf("num_snakes=%lu\n", buffer0);
-                printf("self_snake_index=%lu\n", buffer1);
-                
-                if (buffer0 > MAX_SNAKES || buffer1 >= buffer0) {
-                    // TODO
-                    abort();
-                }
-                num_snakes       = (int) buffer0;
-                self_snake_index = (int) buffer1;
-            }
-
-            if (num_snakes > 0) {
-
-                if (input.count < num_snakes * sizeof(u32) * 2)
-                    continue;
-                for (int i = 0; i < num_snakes; i++) {
-
-                    input = tcp_client_get_input(server_handle);
-
-                    u32 head_x;
-                    u32 head_y;
-        
-                    // Get head position
-                    memcpy(&head_x, input.data + 0, sizeof(u32));
-                    memcpy(&head_y, input.data + 4, sizeof(u32));
-                    tcp_client_read(server_handle, 2 * sizeof(u32));
-
-                    head_x = ntohl(head_x);
-                    head_y = ntohl(head_y);
-                    printf("snake[%d].head={x=%lu, y=%lu}\n", i, head_x, head_y);
-                    if (head_x >= WORLD_W || head_y >= WORLD_H) {
-                        // TODO
-                        printf("Invalid snake coordinates\n");
-                        abort();
-                    }
-
-                    create_snake(&latest_game_state.snakes[i], head_x, head_y);
-                }
-                done = true;
-            }
-        } while (!done && !window.should_close);
-
-        os_update();
-        gfx_update();
+    float total_h = (COUNTOF(entries) - 1) * pad_y;
+    for (int i = 0; i < COUNTOF(entries); i++)
+        total_h += entries[i].h;
+    
+    for (int i = 0; i < COUNTOF(entries); i++) {
+        entries[i].x = (window.width - entries[i].w) / 2;
+        entries[i].y = (window.height - total_h) / 2 + (COUNTOF(entries) - i - 1) * (text_h + pad_y);
     }
+
+    bool submit = false;
+
+    for (int i = 0; i < COUNTOF(entries); i++) {
+        if (input_frame.mouse_x >= entries[i].x - 10 && input_frame.mouse_x < entries[i].x + entries[i].w + 10 &&
+            input_frame.mouse_y >= entries[i].y - 10 && input_frame.mouse_y < entries[i].y + entries[i].h + 10) {
+            if (cursor != i) {
+                play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+                cursor = i;
+            }
+            submit = submit || is_key_just_pressed(MOUSE_BUTTON_LEFT);
+            break;
+        }
+    }
+
+    if (is_key_just_pressed(KEY_ARROW_UP)) {
+        if (cursor > 0) {
+            cursor--;
+            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+        }
+    }
+
+    if (is_key_just_pressed(KEY_ARROW_DOWN)) {
+        if (cursor < COUNTOF(entries)-1) {
+            cursor++;
+            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+        }
+    }
+
+    target_menu_box_x = entries[cursor].x - 10;
+    target_menu_box_y = entries[cursor].y - 10;
+    target_menu_box_w = entries[cursor].w + 20;
+    target_menu_box_h = entries[cursor].h + 20;
+
+    if (is_key_just_pressed('A'))
+        submit = true;
+
+    if (submit) {
+        switch (cursor) {
+            case 0:
+            is_server = true;
+            multiplayer = false;
+            printf("Single player mode\n");
+            self_snake_index = 0;
+            create_snake(&latest_game_state.snakes[0], get_random() % WORLD_W, get_random() % WORLD_H);
+            show_menu_box = false;
+            current_view = VIEW_SINGLE_PLAYER;
+            break;
+            case 1:
+            is_server = true;
+            multiplayer = true;
+            show_menu_box = false;
+            current_view = VIEW_WAITING_FOR_PLAYERS;
+            break;
+            case 2:
+            is_server = false;
+            multiplayer = true;
+            show_menu_box = false;
+            current_view = VIEW_CONNECTING;
+            break;
+            case 3:
+            window.should_close = true;
+            break;
+        }
+        play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+    }
+
+    for (int i = 0; i < COUNTOF(entries); i++)
+        draw_text(font, entries[i].text, text_h, v2(entries[i].x, entries[i].y), v2(1, 1), cursor == i ? COLOR_RED : COLOR_BLACK);
+}
+
+void message_and_button_loop(string msg, string btn, ViewID view)
+{
+    show_menu_box = true;
+
+    int pad_y = 30;
+    int text_h = 40;
+
+    Gfx_Text_Metrics metrics;
+    
+    metrics = measure_text(font, msg, text_h, v2(1, 1));
+    float msg_w = metrics.visual_size.x;
+    float msg_h = metrics.visual_size.y;
+
+    metrics = measure_text(font, btn, text_h, v2(1, 1));
+    float btn_w = metrics.visual_size.x;
+    float btn_h = metrics.visual_size.y;
+
+    float total_h = msg_h + btn_h + pad_y;
+
+    float msg_x = (window.width  -   msg_w) / 2;
+    float msg_y = (window.height - total_h) / 2 + pad_y + text_h;
+
+    float btn_x = (window.width  -   btn_w) / 2;
+    float btn_y = (window.height - total_h) / 2;
+
+    draw_text(font, msg, text_h, v2(msg_x, msg_y), v2(1, 1), COLOR_BLACK);
+    draw_text(font, btn, text_h, v2(btn_x, btn_y), v2(1, 1), COLOR_RED);
+
+    if (is_key_just_pressed('A'))
+        current_view = view;
+    
+    if (input_frame.mouse_x >= btn_x - 10 && input_frame.mouse_x < btn_x + btn_w + 10 &&
+        input_frame.mouse_y >= btn_y - 10 && input_frame.mouse_y < btn_y + btn_h + 10) {
+        if (is_key_just_pressed(MOUSE_BUTTON_LEFT))
+            current_view = view;
+    }
+
+    menu_box_x = btn_x - 10;
+    menu_box_y = btn_y - 10;
+    menu_box_w = btn_w + 20;
+    menu_box_h = btn_h + 20;
 }
 
 void wait_for_players_loop(void)
 {
     assert(multiplayer && is_server);
 
-    // Listen for connections
-    server_handle = tcp_server_create(STR(""), TCP_PORT, MAX_SNAKES);
     if (server_handle == TCP_INVALID) {
-        printf("Could not start server\n");
-        abort();
-    }
-
-    self_snake_index = 0;
-    create_snake(&latest_game_state.snakes[0], get_random() % WORLD_W, get_random() % WORLD_H);
-
-    // Wait for other players
-    bool all_players_connected = false;
-    while (!all_players_connected && !window.should_close) {
-
-        reset_temporary_storage();
-
-        draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
-
-        static int dots = 0;
-        string text;
-        switch (dots) {
-            case 0: text = STR("Waiting for players");     dots++;   break;
-            case 1: text = STR("Waiting for players .");   dots++;   break;
-            case 2: text = STR("Waiting for players ..");  dots++;   break;
-            case 3: text = STR("Waiting for players ..."); dots = 0; break;
-        }
-        draw_text(font, text, 30, v2(30, 30), v2(1, 1), COLOR_BLACK);
-
-        printf(".. Waiting for connections ..\n");
-        tcp_server_poll(server_handle, 1000.0/FPS); // TODO: Wait until timeout
-        for (;;) {
-            TCPEvent event = tcp_server_event(server_handle);
-            if (event.type == TCP_EVENT_NONE) break;
-
-            if (event.type == TCP_EVENT_CONNECT) {
-                int i = 0;
-                while (client_handles[i] != TCP_INVALID) {
-                    i++;
-                    assert(i < MAX_SNAKES-1);
-                }
-                client_handles[i] = event.handle;
-                create_snake(&latest_game_state.snakes[i+1],
-                    get_random() % WORLD_W,
-                    get_random() % WORLD_H);
-                printf("Player connected\n");
-            }
-
-            if (event.type == TCP_EVENT_DISCONNECT) {
-                int i = 0;
-                while (client_handles[i] != event.handle) {
-                    i++;
-                    assert(i < MAX_SNAKES);
-                }
-                latest_game_state.snakes[i+1].used = false;
-                client_handles[i] = TCP_INVALID;
-                tcp_client_close(event.handle);
-                printf("Player disconnected\n");
-                continue;
-            }
-
-            if (event.type == TCP_EVENT_DATA) {
-                printf("Player sent unexpected data\n");
-                abort();
-            }
+        // Listen for connections
+        server_handle = tcp_server_create(STR(""), TCP_PORT, MAX_SNAKES);
+        if (server_handle == TCP_INVALID) {
+            current_view = VIEW_COULDNT_HOST_GAME;
+            return;
         }
 
-        int num_snakes = count_snakes(&latest_game_state);
-        if (num_snakes == 2) all_players_connected = true;
-
-        os_update(); 
-        gfx_update();
-
+        self_snake_index = 0;
+        create_snake(&latest_game_state.snakes[0], get_random() % WORLD_W, get_random() % WORLD_H);
     }
 
-    printf("Ready to play!\n");
+    tcp_server_poll(server_handle, 0);
+    for (;;) {
+        TCPEvent event = tcp_server_event(server_handle);
+        if (event.type == TCP_EVENT_NONE) break;
+
+        if (event.type == TCP_EVENT_CONNECT) {
+            int i = 0;
+            while (client_handles[i] != TCP_INVALID) {
+                i++;
+                assert(i < MAX_SNAKES-1);
+            }
+            client_handles[i] = event.handle;
+            create_snake(&latest_game_state.snakes[i+1],
+                get_random() % WORLD_W,
+                get_random() % WORLD_H);
+            continue;
+        }
+
+        if (event.type == TCP_EVENT_DISCONNECT) {
+            int i = 0;
+            while (client_handles[i] != event.handle) {
+                i++;
+                assert(i < MAX_SNAKES);
+            }
+            latest_game_state.snakes[i+1].used = false;
+            client_handles[i] = TCP_INVALID;
+            tcp_client_close(event.handle);
+            continue;
+        }
+
+        if (event.type == TCP_EVENT_DATA) {
+            // TODO
+            printf("Player sent unexpected data\n");
+            abort();
+        }
+    }
+
+    int num_snakes = count_snakes(&latest_game_state);
+    if (num_snakes < 2) {
+        message_and_button_loop(STR("Waiting for players"), STR("CANCEL"), VIEW_MAIN_MENU);
+        if (current_view == VIEW_MAIN_MENU) {
+            for (int i = 0; i < MAX_SNAKES; i++)
+                latest_game_state.snakes[i].used = false;
+            cleanup_network_resources_if_any();
+        }
+        return;
+    }
 
     // Compact snake structs so that their layout is the
     // same as the client's. Note that the first struct is
@@ -868,7 +956,6 @@ void wait_for_players_loop(void)
     }
 
     // Send player positions to the clients
-    int num_snakes = count_snakes(&latest_game_state);
     for (int i = 0, j = 1; i < MAX_SNAKES-1; i++) {
         if (client_handles[i] == TCP_INVALID)
             continue;
@@ -901,6 +988,114 @@ void wait_for_players_loop(void)
 
         j++;
     }
+
+    current_view = VIEW_MULTI_PLAYER;
+}
+
+void connecting_loop(void)
+{
+    assert(multiplayer && !is_server);
+
+    if (server_handle == TCP_INVALID) {
+        // Connect to host
+        server_handle = tcp_client_create(STR("127.0.0.1"), TCP_PORT);
+        if (server_handle == TCP_INVALID) {
+            current_view = VIEW_COULDNT_CONNECT;
+            return;
+        }
+    }
+
+    // Receive starting state
+    static int num_snakes = 0;
+
+    tcp_client_poll(server_handle, 0);
+
+    bool done = false;
+    do {
+        TCPEvent event = tcp_client_event(server_handle);
+        if (event.type == TCP_EVENT_NONE) break;
+
+        if (event.type == TCP_EVENT_DISCONNECT) {
+            current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+            return;
+        }
+
+        assert(event.type == TCP_EVENT_DATA);
+
+        string input = tcp_client_get_input(server_handle);
+
+        if (num_snakes == 0) {
+
+            if (input.count < 2 * sizeof(u32))
+                continue;
+            u32 buffer0;
+            u32 buffer1;
+
+            // Get snake count and client index
+            memcpy(&buffer0, input.data + 0, sizeof(u32));
+            memcpy(&buffer1, input.data + 4, sizeof(u32));
+            tcp_client_read(server_handle, 2 * sizeof(u32));
+            buffer0 = ntohl(buffer0);
+            buffer1 = ntohl(buffer1);
+
+            if (buffer0 > MAX_SNAKES || buffer1 >= buffer0) {
+                current_view = VIEW_INVALID_SERVER_RESPONSE;
+                // TODO: Cleanup
+                return;
+            }
+            num_snakes       = (int) buffer0;
+            self_snake_index = (int) buffer1;
+        }
+
+        if (num_snakes > 0) {
+
+            if (input.count < num_snakes * sizeof(u32) * 2)
+                continue;
+            for (int i = 0; i < num_snakes; i++) {
+
+                input = tcp_client_get_input(server_handle);
+
+                u32 head_x;
+                u32 head_y;
+    
+                // Get head position
+                memcpy(&head_x, input.data + 0, sizeof(u32));
+                memcpy(&head_y, input.data + 4, sizeof(u32));
+                tcp_client_read(server_handle, 2 * sizeof(u32));
+
+                head_x = ntohl(head_x);
+                head_y = ntohl(head_y);
+                if (head_x >= WORLD_W || head_y >= WORLD_H) {
+                    current_view = VIEW_INVALID_SERVER_RESPONSE;
+                    // TODO: Cleanup
+                    return;
+                }
+
+                create_snake(&latest_game_state.snakes[i], head_x, head_y);
+            }
+            done = true;
+            current_view = VIEW_MULTI_PLAYER;
+        }
+    } while (!done && !window.should_close);
+}
+
+void single_player_loop(void)
+{
+    process_player_inputs();
+    update_game_state(&latest_game_state);
+    draw_game_state(&latest_game_state);
+    if (count_snakes(&latest_game_state) == 0)
+        current_view = VIEW_SINGLE_PLAYER_YOU_DIED;
+}
+
+void multi_player_loop(void)
+{
+    process_player_inputs();
+    recalculate_latest_state();
+    update_game_state(&latest_game_state);
+    draw_game_state(&latest_game_state);
+    if (count_snakes(&latest_game_state) == 1)
+        current_view = VIEW_MAIN_MENU;
 }
 
 int entry(int argc, char **argv)
@@ -922,87 +1117,59 @@ int entry(int argc, char **argv)
         abort();
     }
 
-    /*
-     * Choose between client or server
-     */
     while (!window.should_close) {
-
-		reset_temporary_storage();
-
-        draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
-
-        static int cursor = 0;
-
-        if (is_key_just_pressed(KEY_ARROW_UP))
-            if (cursor > 0) cursor--;
-
-        if (is_key_just_pressed(KEY_ARROW_DOWN))
-            if (cursor < 2) cursor++;
-
-        if (is_key_just_pressed('A')) {
-            switch (cursor) {
-                case 0:
-                is_server = true;
-                multiplayer = false;
-                break;
-                case 1:
-                is_server = true;
-                multiplayer = true;
-                break;
-                case 2:
-                is_server = false;
-                multiplayer = true;
-                break;
-            }
-            break;
-        }
-        draw_text(font, STR("PLAY"), 30, v2(30, 200), v2(1, 1), cursor == 0 ? COLOR_RED : COLOR_BLACK);
-        draw_text(font, STR("HOST"), 30, v2(30, 100), v2(1, 1), cursor == 1 ? COLOR_RED : COLOR_BLACK);
-        draw_text(font, STR("JOIN"), 30, v2(30,   0), v2(1, 1), cursor == 2 ? COLOR_RED : COLOR_BLACK);
-
-        os_update();
-		gfx_update();
-    }
-
-    if (!multiplayer) {
-        printf("Single player mode\n");
-        self_snake_index = 0;
-        create_snake(&latest_game_state.snakes[0], get_random() % WORLD_W, get_random() % WORLD_H);
-    } else if (is_server) {
-        wait_for_players_loop();
-    } else {
-        connecting_loop();
-    }
-
-    memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
-
-	while (!window.should_close) {
 
         float64 frame_start_time = os_get_current_time_in_seconds();
 
         reset_temporary_storage();
-
         draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
-        process_player_inputs();
-        if (multiplayer)
-            recalculate_latest_state();
-        update_game_state(&latest_game_state);
-        draw_game_state(&latest_game_state);
+        apple_consumed_this_frame = false;
 
-        int final_snake_count = multiplayer ? 1 : 0;
-        if (count_snakes(&latest_game_state) == final_snake_count)
-            break;
+        bool frame_cap = false;
+        switch (current_view) {
+            case VIEW_MAIN_MENU: main_menu_loop(); break;
+            case VIEW_WAITING_FOR_PLAYERS: wait_for_players_loop(); break;
+            case VIEW_CONNECTING: connecting_loop(); break;
+            case VIEW_SINGLE_PLAYER: single_player_loop(); frame_cap = true; break;
+            case VIEW_MULTI_PLAYER: multi_player_loop(); frame_cap = true; break;
+            case VIEW_COULDNT_HOST_GAME: message_and_button_loop(STR("Couldn't start game"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
+            case VIEW_COULDNT_CONNECT: message_and_button_loop(STR("Couldn't connect to host"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
+            case VIEW_SINGLE_PLAYER_YOU_DIED: message_and_button_loop(STR("You died!"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
+            case VIEW_INVALID_SERVER_RESPONSE: message_and_button_loop(STR("Invalid server response"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
+            case VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY: message_and_button_loop(STR("Server disconnected unexpectedly"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
+        }
 
-		os_update(); 
+        if (apple_consumed_this_frame)
+            play_one_audio_clip(STR("assets/sounds/mixkit-winning-a-coin-video-game-2069.wav"));
+
+        if (show_menu_box) {
+            float line_w = 3;
+            draw_line(v2(menu_box_x,              menu_box_y             ), v2(menu_box_x + menu_box_w, menu_box_y             ), line_w, COLOR_BLACK);
+            draw_line(v2(menu_box_x + menu_box_w, menu_box_y             ), v2(menu_box_x + menu_box_w, menu_box_y + menu_box_h), line_w, COLOR_BLACK);
+            draw_line(v2(menu_box_x + menu_box_w, menu_box_y + menu_box_h), v2(menu_box_x,              menu_box_y + menu_box_h), line_w, COLOR_BLACK);
+            draw_line(v2(menu_box_x,              menu_box_y + menu_box_h), v2(menu_box_x,              menu_box_y             ), line_w, COLOR_BLACK);
+        }
+
+        os_update();
 		gfx_update();
 
         float64 elapsed = os_get_current_time_in_seconds() - frame_start_time;
-        if (elapsed < 1.0F/FPS)
-            os_high_precision_sleep(1000.0F/FPS - elapsed * 1000);
-	}
+
+        if (show_menu_box) {
+            animate_f32_to_target(&menu_box_x, target_menu_box_x, elapsed, 40);
+            animate_f32_to_target(&menu_box_y, target_menu_box_y, elapsed, 40);
+            animate_f32_to_target(&menu_box_w, target_menu_box_w, elapsed, 40);
+            animate_f32_to_target(&menu_box_h, target_menu_box_h, elapsed, 40);
+        }
+
+        if (frame_cap) {
+            if (elapsed < 1.0F/FPS)
+                os_high_precision_sleep(1000.0F/FPS - elapsed * 1000);
+        }
+    }
 
     destroy_font(font);
-    cleanup_network_resources();
+    cleanup_network_resources_if_any();
 	return 0;
 }
