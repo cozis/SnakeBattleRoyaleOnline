@@ -1,8 +1,8 @@
-#define FPS 10
+#define FPS 5
 #define TILE_W 16
 #define TILE_H 16
-#define WORLD_W 10
-#define WORLD_H 10
+#define WORLD_W 30
+#define WORLD_H 30
 #define MAX_SNAKES 8
 #define MAX_APPLES 4
 #define TCP_PORT 8080
@@ -421,6 +421,11 @@ void recalculate_latest_state(void)
     apply_inputs_until_time(&latest_game_state, latest_frame_index, false);
 }
 
+bool we_are_dead(void)
+{
+    return !latest_game_state.snakes[self_snake_index].used;
+}
+
 void draw_game_state(GameState *game)
 {
     float pad_x = 50;
@@ -443,6 +448,9 @@ void draw_game_state(GameState *game)
     float offset_y = (window.height - px_world_h) / 2;
 
     draw_rect(v2(offset_x, offset_y), v2(px_world_w, px_world_h), COLOR_WHITE);
+
+    if (we_are_dead())
+        draw_text(font, STR("YOU DIED"), 30, v2(30, 39), v2(1, 1), COLOR_BLACK);
 
     for (int i = 0; i < MAX_SNAKES; i++) {
 
@@ -535,10 +543,12 @@ void apply_remote_input(Direction dir, u32 player, u64 time)
 
 void process_player_inputs(void)
 {
-    if (is_key_just_pressed(KEY_ARROW_UP))    apply_local_input(DIR_UP);
-    if (is_key_just_pressed(KEY_ARROW_DOWN))  apply_local_input(DIR_DOWN);
-    if (is_key_just_pressed(KEY_ARROW_LEFT))  apply_local_input(DIR_LEFT);
-    if (is_key_just_pressed(KEY_ARROW_RIGHT)) apply_local_input(DIR_RIGHT);
+    if (!we_are_dead()) {
+        if (is_key_just_pressed(KEY_ARROW_UP))    apply_local_input(DIR_UP);
+        if (is_key_just_pressed(KEY_ARROW_DOWN))  apply_local_input(DIR_DOWN);
+        if (is_key_just_pressed(KEY_ARROW_LEFT))  apply_local_input(DIR_LEFT);
+        if (is_key_just_pressed(KEY_ARROW_RIGHT)) apply_local_input(DIR_RIGHT);
+    }
 
     if (!multiplayer)
         return;
@@ -893,11 +903,6 @@ void wait_for_players_loop(void)
     }
 }
 
-bool we_are_dead(void)
-{
-    return !latest_game_state.snakes[self_snake_index].used;
-}
-
 int entry(int argc, char **argv)
 {
     init_globals();
@@ -983,10 +988,11 @@ int entry(int argc, char **argv)
         if (multiplayer)
             recalculate_latest_state();
         update_game_state(&latest_game_state);
-        if (we_are_dead()) {
-            // We're dead x_x
-        }
         draw_game_state(&latest_game_state);
+
+        int final_snake_count = multiplayer ? 1 : 0;
+        if (count_snakes(&latest_game_state) == final_snake_count)
+            break;
 
 		os_update(); 
 		gfx_update();
