@@ -78,6 +78,8 @@ TCPHandle client_handles[MAX_SNAKES-1]; // -1 because the host doesn't need one
 
 Gfx_Font *font;
 
+Gfx_Image *sprite_sheet;
+
 Audio_Player *song_player;
 Audio_Player *effects_player;
 
@@ -181,6 +183,10 @@ void create_snake(Snake *s, u32 x, u32 y)
     s->iter_index = 0;
     s->iter_x = 0;
     s->iter_y = 0;
+    for (int i = 0; i < 8; i++) {
+        s->body[i] = DIR_LEFT;
+        s->body_len++;
+    }
 }
 
 void change_snake_direction(Snake *s, Direction d)
@@ -461,10 +467,119 @@ bool we_are_dead(void)
     return !latest_game_state.snakes[self_snake_index].used;
 }
 
+#define m4_identity m4_make_scale(v3(1, 1, 1))
+
+void draw_subimage(Gfx_Image *image, int rotate,
+                  float dst_x, float dst_y, float dst_w, float dst_h,
+                  float src_x, float src_y, float src_w, float src_h)
+{
+    Matrix4 model = m4_identity;
+    model = m4_translate(model, v3(dst_x, dst_y, 0.0));
+
+    switch (rotate & 3) {
+        case 0: /* model = m4_translate(model, v3(dst_x, dst_y, 0.0)); */ break;
+        case 1: model = m4_translate(model, v3(0    , dst_h, 0)); break;
+        case 2: model = m4_translate(model, v3(dst_w, dst_h, 0)); break;
+        case 3: model = m4_translate(model, v3(dst_w,     0, 0)); break;
+    };
+
+    model = m4_rotate_z(model, M_PI / 2 * rotate);
+
+    Draw_Quad *q = draw_image_xform(image, model, v2(dst_w, dst_h), COLOR_WHITE);
+
+    q->uv = v4(
+        (float) src_x / image->width,
+        (float) src_y / image->height,
+        (float) (src_x + src_w) / image->width,
+        (float) (src_y + src_h) / image->height
+    );
+}
+
+void draw_snake(Snake *s, float offset_x, float offset_y, float scale)
+{
+    //Direction prev_dir;
+    start_iter_over_snake(s);
+    for (u32 i = 0, x, y; next_snake_body_part(s, &x, &y); i++) {
+        if (i == 0) {
+            int rotate;
+            switch (s->dir) {
+                case DIR_UP   : rotate = 1; break;
+                case DIR_DOWN : rotate = 3; break;
+                case DIR_LEFT : rotate = 0; break;
+                case DIR_RIGHT: rotate = 2; break;
+            }
+            draw_subimage(sprite_sheet, rotate,
+                offset_x + x * scale * TILE_W,
+                offset_y + y * scale * TILE_H,
+                scale * TILE_W,
+                scale * TILE_H,
+                1 * 8, 1 * 8,
+                8,
+                8);
+        } else if (i == s->body_len) {
+            int sprite_x = 0;
+            int sprite_y = 1;
+            int rotate = 0;
+            switch (s->body[(s->body_idx + i) % MAX_SNAKE_SIZE]) {
+                case DIR_UP   : rotate = 1; break;
+                case DIR_DOWN : rotate = 3; break;
+                case DIR_LEFT : rotate = 0; break;
+                case DIR_RIGHT: rotate = 2; break;
+            }
+
+            draw_subimage(sprite_sheet, rotate,
+                offset_x + x * scale * TILE_W,
+                offset_y + y * scale * TILE_H,
+                scale * TILE_W,
+                scale * TILE_H,
+                sprite_x * 8,
+                sprite_y * 8,
+                8, 8);
+        } else {
+
+            int sprite_x = 0;
+            int sprite_y = 1;
+            int rotate = 0;
+
+            Direction curr_dir = s->body[(s->body_idx + i + 0) % MAX_SNAKE_SIZE];
+            Direction next_dir = s->body[(s->body_idx + i + 1) % MAX_SNAKE_SIZE];
+
+            #define PAIR(X, Y) (((u64) (u32) (X) << 32) | (u64) (u32) (Y))
+            switch (PAIR(curr_dir, next_dir)) {
+
+                case PAIR(DIR_UP,    DIR_UP   ): sprite_x = 0; sprite_y = 0; rotate = 1; break;
+                case PAIR(DIR_DOWN,  DIR_DOWN ): sprite_x = 0; sprite_y = 0; rotate = 1; break;
+                case PAIR(DIR_LEFT,  DIR_LEFT ): sprite_x = 0; sprite_y = 0; rotate = 0; break;
+                case PAIR(DIR_RIGHT, DIR_RIGHT): sprite_x = 0; sprite_y = 0; rotate = 0; break;
+                case PAIR(DIR_UP,    DIR_LEFT ): sprite_x = 1; sprite_y = 0; rotate = 2; break;
+                case PAIR(DIR_LEFT,  DIR_UP   ): sprite_x = 1; sprite_y = 0; rotate = 0; break;
+                case PAIR(DIR_UP,    DIR_RIGHT): sprite_x = 1; sprite_y = 0; rotate = 1; break;
+                case PAIR(DIR_RIGHT, DIR_UP   ): sprite_x = 1; sprite_y = 0; rotate = 3; break;
+                case PAIR(DIR_DOWN,  DIR_LEFT ): sprite_x = 1; sprite_y = 0; rotate = 3; break;
+                case PAIR(DIR_LEFT,  DIR_DOWN ): sprite_x = 1; sprite_y = 0; rotate = 1; break;
+                case PAIR(DIR_DOWN,  DIR_RIGHT): sprite_x = 1; sprite_y = 0; rotate = 0; break;
+                case PAIR(DIR_RIGHT, DIR_DOWN ): sprite_x = 1; sprite_y = 0; rotate = 2; break;
+
+                default: assert(0); break;
+            }
+
+            draw_subimage(sprite_sheet, rotate,
+                offset_x + x * scale * TILE_W,
+                offset_y + y * scale * TILE_H,
+                scale * TILE_W,
+                scale * TILE_H,
+                sprite_x * 8,
+                sprite_y * 8,
+                8, 8);
+        }
+    }
+}
+
 void draw_game_state(GameState *game)
 {
     float pad_x = 50;
     float pad_y = 20;
+
     float nopad_window_w = window.width  - 2 * pad_x;
     float nopad_window_h = window.height - 2 * pad_y;
 
@@ -484,17 +599,12 @@ void draw_game_state(GameState *game)
 
     draw_rect(v2(offset_x, offset_y), v2(px_world_w, px_world_h), COLOR_WHITE);
 
-    if (we_are_dead())
-        draw_text(font, STR("YOU DIED"), 30, v2(30, 39), v2(1, 1), COLOR_BLACK);
-
     for (int i = 0; i < MAX_SNAKES; i++) {
 
         Snake *s = &game->snakes[i];
         if (!s->used) continue;
 
-        start_iter_over_snake(s);
-        for (u32 x, y; next_snake_body_part(s, &x, &y); )
-            draw_rect(v2(offset_x + x * scale * TILE_W, offset_y + y * scale * TILE_H), v2(scale * TILE_W, scale * TILE_H), COLOR_GREEN);
+        draw_snake(s, offset_x, offset_y, scale);
     }
 
     for (int i = 0; i < MAX_APPLES; i++) {
@@ -854,13 +964,17 @@ void message_and_button_loop(string msg, string btn, ViewID view)
     draw_text(font, msg, text_h, v2(msg_x, msg_y), v2(1, 1), COLOR_BLACK);
     draw_text(font, btn, text_h, v2(btn_x, btn_y), v2(1, 1), COLOR_RED);
 
-    if (is_key_just_pressed('A'))
+    if (is_key_just_pressed('A')) {
         current_view = view;
+        play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+    }
     
     if (input_frame.mouse_x >= btn_x - 10 && input_frame.mouse_x < btn_x + btn_w + 10 &&
         input_frame.mouse_y >= btn_y - 10 && input_frame.mouse_y < btn_y + btn_h + 10) {
-        if (is_key_just_pressed(MOUSE_BUTTON_LEFT))
+        if (is_key_just_pressed(MOUSE_BUTTON_LEFT)) {
             current_view = view;
+            play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+        }
     }
 
     menu_box_x = btn_x - 10;
@@ -1104,8 +1218,8 @@ int entry(int argc, char **argv)
     init_game_state(&latest_game_state);
 
 	window.title = STR("Snake Battle Royale");
-	window.scaled_width = 1280/4; // We need to set the scaled size if we want to handle system scaling (DPI)
-	window.scaled_height = 720/4;
+	window.scaled_width = 400; // We need to set the scaled size if we want to handle system scaling (DPI)
+	window.scaled_height = 500;
 	window.x = 200;
 	window.y = 90;
 	window.clear_color = hex_to_rgba(0x6495EDff);
@@ -1117,6 +1231,13 @@ int entry(int argc, char **argv)
         abort();
     }
 
+    string sprite_sheet_file = STR("assets/sprites/snake.png");
+    sprite_sheet = load_image_from_disk(sprite_sheet_file, get_heap_allocator());
+    if (!sprite_sheet) {
+        printf("Couldn't load image '%s'\n", sprite_sheet_file);
+        abort();
+    }
+
     while (!window.should_close) {
 
         float64 frame_start_time = os_get_current_time_in_seconds();
@@ -1124,6 +1245,7 @@ int entry(int argc, char **argv)
         reset_temporary_storage();
         draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
+        show_menu_box = false;
         apple_consumed_this_frame = false;
 
         bool frame_cap = false;
