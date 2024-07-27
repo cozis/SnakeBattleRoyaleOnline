@@ -8,6 +8,7 @@
     "*.h": "cpp",
     "initializer_list": "c",
     "utility": "c",
-    "xutility": "c"
+    "xutility": "c",
+    "algorithm": "c"
 }
 }

@@ -3,6 +3,7 @@
 **/worlds
 data
 uid
+sdk*
 *.rdbg
 *.exe
 *.pdb

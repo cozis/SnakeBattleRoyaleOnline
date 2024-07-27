@@ -387,7 +387,7 @@ void update_game_state(GameState *game)
 
     assert(server_handle != 12);
 
-    make_sure_there_is_at_least_this_amount_of_apples(game, WORLD_W*WORLD_H);
+    make_sure_there_is_at_least_this_amount_of_apples(game, 4);
     game->frame_index++;
 
     assert(server_handle != 12);
@@ -1115,6 +1115,7 @@ void wait_for_players_loop(void)
     }
 
     current_view = VIEW_MULTI_PLAYER;
+    memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
 }
 
 void connecting_loop(void)
@@ -1200,6 +1201,7 @@ void connecting_loop(void)
             }
             done = true;
             current_view = VIEW_MULTI_PLAYER;
+            memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
         }
     } while (!done && !window.should_close);
 }
@@ -1209,26 +1211,33 @@ void single_player_loop(void)
     process_player_inputs();
     update_game_state(&latest_game_state);
     draw_game_state(&latest_game_state);
-    if (count_snakes(&latest_game_state) == 0)
+    if (count_snakes(&latest_game_state) < 1)
         current_view = VIEW_SINGLE_PLAYER_YOU_DIED;
 }
 
 void multi_player_loop(void)
 {
+    static int old_num_snakes = -1;
+    int num_snakes = count_snakes(&latest_game_state);
+    if (num_snakes != old_num_snakes) {
+        printf("num_snakes = %d\n", num_snakes);
+        old_num_snakes = num_snakes;
+    }
+
+    assert(count_snakes(&latest_game_state) > 0);
+
     if (!process_player_inputs()) {
         current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
         return;
     }
-    
     recalculate_latest_state();
-    
+    apple_consumed_this_frame = false;
     update_game_state(&latest_game_state);
-    
     draw_game_state(&latest_game_state);
-    
-    if (count_snakes(&latest_game_state) == 1)
+    if (count_snakes(&latest_game_state) < 2) {
         current_view = VIEW_MAIN_MENU;
-    
+        cleanup_network_resources_if_any();
+    }
 }
 
 int entry(int argc, char **argv)

@@ -16,7 +16,8 @@ void byte_queue_init(ByteQueue *q)
 
 void byte_queue_free(ByteQueue *q)
 {
-    dealloc(get_heap_allocator(), q->data);
+    if (q->data)
+        dealloc(get_heap_allocator(), q->data);
 }
 
 size_t byte_queue_used_space(ByteQueue *q)
