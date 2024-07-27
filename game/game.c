@@ -2,8 +2,8 @@
 #define FPS 10
 #define TILE_W 16
 #define TILE_H 16
-#define WORLD_W 30
-#define WORLD_H 30
+#define WORLD_W 20
+#define WORLD_H 20
 #define MAX_SNAKES 8
 #define MAX_APPLES 4
 #define TCP_PORT 8080
@@ -183,10 +183,6 @@ void create_snake(Snake *s, u32 x, u32 y)
     s->iter_index = 0;
     s->iter_x = 0;
     s->iter_y = 0;
-    for (int i = 0; i < 8; i++) {
-        s->body[i] = DIR_LEFT;
-        s->body_len++;
-    }
 }
 
 void change_snake_direction(Snake *s, Direction d)
@@ -331,7 +327,7 @@ u64 get_random_from_game(GameState *game)
     return game->seed;
 }
 
-void choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
+bool choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
 {
     for (int i = 0; i < 1000; i++) {
         u32 x = get_random_from_game(game) % WORLD_W;
@@ -339,7 +335,7 @@ void choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
         if (!location_occupied_by_snake_or_apple(game, x, y)) {
             if (out_x) *out_x = x;
             if (out_y) *out_y = y;
-            return;
+            return true;
         }
     }
     for (u32 x = 0; x < WORLD_W; x++)
@@ -347,10 +343,10 @@ void choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
             if (!location_occupied_by_snake_or_apple(game, x, y)) {
                 if (out_x) *out_x = x;
                 if (out_y) *out_y = y;
-                return;
+                return true;
             }
         }
-    assert(0); // No space left
+    return false;
 }
 
 void make_sure_there_is_at_least_this_amount_of_apples(GameState *game, int min_apples)
@@ -359,12 +355,15 @@ void make_sure_there_is_at_least_this_amount_of_apples(GameState *game, int min_
     if (num_apples >= min_apples) return;
 
     int missing = min_apples - num_apples;
-    for (int i = 0; missing > 0; i++) {
+    for (int i = 0; i < MAX_APPLES && missing > 0; i++) {
+
         Apple *a = &game->apples[i];
+
         if (!a->used) {
-            choose_apple_location(game, &a->x, &a->y);
-            a->used = true;
-            missing--;
+            if (choose_apple_location(game, &a->x, &a->y)) {
+                a->used = true;
+                missing--;
+            }
         }
     }
 }
@@ -377,12 +376,21 @@ void update_game_state(GameState *game)
         if (!s->used) continue;
 
         move_snake_forwards(s, game->apples);
+
+        assert(server_handle != 12);
+
         if (snake_head_collided_with_someone_else(s, game))
             s->used = false; // RIP
+        
+        assert(server_handle != 12);
     }
 
-    make_sure_there_is_at_least_this_amount_of_apples(game, 2);
+    assert(server_handle != 12);
+
+    make_sure_there_is_at_least_this_amount_of_apples(game, WORLD_W*WORLD_H);
     game->frame_index++;
+
+    assert(server_handle != 12);
 }
 
 bool pop_input_from_queue(Input *input)
@@ -687,7 +695,8 @@ void apply_remote_input(Direction dir, u32 player, u64 time)
     }
 }
 
-void process_player_inputs(void)
+// returns false a connection with the server is dropped
+bool process_player_inputs(void)
 {
     if (!we_are_dead()) {
         if (is_key_just_pressed(KEY_ARROW_UP))    apply_local_input(DIR_UP);
@@ -697,7 +706,7 @@ void process_player_inputs(void)
     }
 
     if (!multiplayer)
-        return;
+        return true;
     
     if (is_server) {
 
@@ -757,8 +766,8 @@ void process_player_inputs(void)
             if (event.type == TCP_EVENT_NONE) break;
 
             if (event.type == TCP_EVENT_DISCONNECT) {
-                printf("Server disconnected\n");
-                abort();
+                // TODO: Cleanup
+                return false;
             }
 
             assert(event.type == TCP_EVENT_DATA);
@@ -787,6 +796,8 @@ void process_player_inputs(void)
             }
         }
     }
+
+    return true;
 }
 
 void cleanup_network_resources_if_any()
@@ -989,7 +1000,7 @@ void wait_for_players_loop(void)
 
     if (server_handle == TCP_INVALID) {
         // Listen for connections
-        server_handle = tcp_server_create(STR(""), TCP_PORT, MAX_SNAKES);
+        server_handle = tcp_server_create(STR(""), TCP_PORT, MAX_SNAKES-1);
         if (server_handle == TCP_INVALID) {
             current_view = VIEW_COULDNT_HOST_GAME;
             return;
@@ -1204,12 +1215,20 @@ void single_player_loop(void)
 
 void multi_player_loop(void)
 {
-    process_player_inputs();
+    if (!process_player_inputs()) {
+        current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+        return;
+    }
+    
     recalculate_latest_state();
+    
     update_game_state(&latest_game_state);
+    
     draw_game_state(&latest_game_state);
+    
     if (count_snakes(&latest_game_state) == 1)
         current_view = VIEW_MAIN_MENU;
+    
 }
 
 int entry(int argc, char **argv)
@@ -1261,6 +1280,8 @@ int entry(int argc, char **argv)
             case VIEW_INVALID_SERVER_RESPONSE: message_and_button_loop(STR("Invalid server response"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
             case VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY: message_and_button_loop(STR("Server disconnected unexpectedly"), STR("MAIN MENU"), VIEW_MAIN_MENU); break;
         }
+
+        
 
         if (apple_consumed_this_frame)
             play_one_audio_clip(STR("assets/sounds/mixkit-winning-a-coin-video-game-2069.wav"));
