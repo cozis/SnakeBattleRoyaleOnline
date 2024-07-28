@@ -3,7 +3,7 @@
 
 typedef struct {
     bool used;
-    Direction dir;
+    Direction dir, next_dir;
     u32 head_x;
     u32 head_y;
     u32 body_idx;
@@ -102,7 +102,7 @@ void spawn_snake(GameState *game)
 void change_snake_direction(Snake *s, Direction d)
 {
     // Snakes can't face the opposite direction to their movement
-    if (d != -s->dir) s->dir = d;
+    if (d != -s->dir) s->next_dir = d;
 }
 
 void start_iter_over_snake(Snake *s)
@@ -173,6 +173,8 @@ bool consume_apple_at(Apple *apples, u32 x, u32 y)
 
 bool move_snake_forwards(Snake *s, Apple *apples)
 {
+    s->dir = s->next_dir;
+
     switch (s->dir) {
         case DIR_UP   : s->head_y++; break;
         case DIR_DOWN : s->head_y--; break;
@@ -244,6 +246,7 @@ bool choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
         u32 x = get_random_from_game(game) % WORLD_W;
         u32 y = get_random_from_game(game) % WORLD_H;
         if (!location_occupied_by_snake_or_apple(game, x, y)) {
+            printf("Apple location (%d, %d)\n", x, y);
             if (out_x) *out_x = x;
             if (out_y) *out_y = y;
             return true;

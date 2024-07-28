@@ -132,11 +132,20 @@ void apply_input_to_game(Input input)
         apply_input_to_game_instance(&latest_game_state, input);
 }
 
+float last_update_time = -1;
+
 void update_game(void)
 {
-    if (multiplayer)
-        recalculate_latest_state();
-    update_game_instance(&latest_game_state);
+    float current_time = os_get_current_time_in_seconds();
+    int num_steps = last_update_time < 0 ? 1 : (current_time - last_update_time) * FPS;
+
+    if (num_steps > 0) {
+        if (multiplayer)
+            recalculate_latest_state();
+        for (int i = 0; i < num_steps; i++)
+            update_game_instance(&latest_game_state);
+        last_update_time = current_time;
+    }
 }
 
 bool game_apple_consumed_this_frame(void)

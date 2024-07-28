@@ -202,6 +202,9 @@ void wait_for_players_loop(void)
             u64 time = htonll(get_absolute_time_us());
             tcp_client_write(client_handles[i], &time, sizeof(time));
 
+            u64 seed = htonll(latest_game_state.seed);
+            tcp_client_write(client_handles[i], &seed, sizeof(seed));
+
             // Send the player count
             u32 buffer = htonl(num_players);
             tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
@@ -273,6 +276,7 @@ void connecting_loop(void)
                     init_snake(&latest_game_state.snakes[i],
                                initial.snakes[i].head_x,
                                initial.snakes[i].head_y);
+                latest_game_state.seed = initial.seed;
                 memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
 
                 u64 current_time_us = get_absolute_time_us();
@@ -331,7 +335,7 @@ void play_loop(void)
 int entry(int argc, char **argv)
 {
 	window.title = STR("Snake Battle Royale");
-	window.scaled_width = 400; // We need to set the scaled size if we want to handle system scaling (DPI)
+	window.scaled_width = 500; // We need to set the scaled size if we want to handle system scaling (DPI)
 	window.scaled_height = 500;
 	window.x = 200;
 	window.y = 90;
@@ -360,7 +364,6 @@ int entry(int argc, char **argv)
         reset_temporary_storage();
         draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
-        bool frame_cap = false;
         switch (current_view) {
             
             case VIEW_MAIN_MENU:
@@ -377,7 +380,6 @@ int entry(int argc, char **argv)
             
             case VIEW_PLAY:
             play_loop();
-            frame_cap = true;
             break;
 
             case VIEW_COULDNT_CONNECT:
@@ -394,11 +396,6 @@ int entry(int argc, char **argv)
 
         float64 elapsed = os_get_current_time_in_seconds() - frame_start_time;
         animate_rect_to_target(&menu_box, target_menu_box, elapsed, 40);
-
-        if (frame_cap) {
-            if (elapsed < 1.0F/FPS)
-                os_high_precision_sleep(1000.0F/FPS - elapsed * 1000);
-        }
     }
 
     network_free();

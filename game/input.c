@@ -58,6 +58,7 @@ typedef struct { // TODO: Make sure there is no padding
 
 typedef struct { // TODO: Make sure there is no padding
     u64 time_us;
+    u64 seed;
     u32 num_snakes;
     u32 self_index;
     InitialSnakeStateMessage snakes[MAX_SNAKES];
@@ -85,19 +86,21 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 
         printf("Buffer has %d bytes\n", input_buffer.count);
 
-        if (input_buffer.count < sizeof(u64) + 2 * sizeof(u32))
+        if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32))
             return 0;
 
-        memcpy(initial, input_buffer.data, sizeof(u64) +  2 * sizeof(u32));
+        memcpy(initial, input_buffer.data, 2 * sizeof(u64) +  2 * sizeof(u32));
         initial->time_us    = ntohll(initial->time_us);
+        initial->seed       = ntohll(initial->seed);
         initial->num_snakes = ntohl(initial->num_snakes);
         initial->self_index = ntohl(initial->self_index);
 
-        if (input_buffer.count < sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage))
+        if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage))
             return 0;
 
         memcpy(initial, input_buffer.data, sizeof(InitialGameStateMessage));
         initial->time_us    = ntohll(initial->time_us);
+        initial->seed       = ntohll(initial->seed);
         initial->num_snakes = ntohl(initial->num_snakes);
         initial->self_index = ntohl(initial->self_index);
 
@@ -106,7 +109,7 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
             initial->snakes[i].head_y = ntohl(initial->snakes[i].head_y);
         }
 
-        tcp_client_read(server_handle, sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage));
+        tcp_client_read(server_handle, 2 * sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage));
 
         // TODO: May need to handle other messaged
         return 1;
