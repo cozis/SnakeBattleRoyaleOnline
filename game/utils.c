@@ -40,21 +40,17 @@ void animate_rect_to_target(Rect *value, Rect target, float delta_t, float rate)
 
 #define m4_identity m4_make_scale(v3(1, 1, 1))
 
-void draw_subimage(Gfx_Image *image, int rotate,
+void draw_subimage(Gfx_Image *image, float rotate,
                   float dst_x, float dst_y, float dst_w, float dst_h,
                   float src_x, float src_y, float src_w, float src_h)
 {
     Matrix4 model = m4_identity;
+
     model = m4_translate(model, v3(dst_x, dst_y, 0.0));
 
-    switch (rotate & 3) {
-        case 0: /* model = m4_translate(model, v3(dst_x, dst_y, 0.0)); */ break;
-        case 1: model = m4_translate(model, v3(0    , dst_h, 0)); break;
-        case 2: model = m4_translate(model, v3(dst_w, dst_h, 0)); break;
-        case 3: model = m4_translate(model, v3(dst_w,     0, 0)); break;
-    };
-
+    model = m4_translate(model, v3(dst_w/2, dst_h/2, 0.0));
     model = m4_rotate_z(model, M_PI / 2 * rotate);
+    model = m4_translate(model, v3(-dst_w/2, -dst_h/2, 0.0));
 
     Draw_Quad *q = draw_image_xform(image, model, v2(dst_w, dst_h), COLOR_WHITE);
 

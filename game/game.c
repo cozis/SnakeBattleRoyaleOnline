@@ -79,6 +79,7 @@ void init_snake(Snake *s, u32 x, u32 y)
     assert(s && !s->used);
     s->used = true;
     s->dir = DIR_LEFT;
+    s->next_dir = DIR_LEFT;
     s->head_x = x;
     s->head_y = y;
     s->body_idx = 0;
@@ -323,19 +324,21 @@ void draw_snake(Snake *s, float offset_x, float offset_y, float scale)
     //Direction prev_dir;
     start_iter_over_snake(s);
     for (u32 i = 0, x, y; next_snake_body_part(s, &x, &y); i++) {
+
         if (i == 0) {
 
             /*
              * Draw head
              */
 
-            int rotate;
+            float rotate = -1;
             switch (s->dir) {
-                case DIR_UP   : rotate = 1; break;
-                case DIR_DOWN : rotate = 3; break;
-                case DIR_LEFT : rotate = 0; break;
-                case DIR_RIGHT: rotate = 2; break;
+                case DIR_UP   : target_rotate = 1; break;
+                case DIR_DOWN : target_rotate = 3; break;
+                case DIR_LEFT : target_rotate = 0; break;
+                case DIR_RIGHT: target_rotate = 2; break;
             }
+
             draw_subimage(sprite_sheet, rotate,
                 offset_x + x * scale * TILE_W,
                 offset_y + y * scale * TILE_H,
