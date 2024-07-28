@@ -28,8 +28,8 @@ typedef struct {
     TCPHandle handle;
 } TCPEvent;
 
-#define MAX_SERVERS 1
-#define MAX_CLIENTS 1
+#define TCP_MAX_SERVERS 1
+#define TCP_MAX_CLIENTS 1
 
 #define MAX_EVENTS_PER_CLIENT 3
 
@@ -100,8 +100,8 @@ struct TCPClient {
 };
 
 // TODO: Use more meaningful names here
-static TCPServer servers[MAX_SERVERS];
-static TCPClient clients[MAX_CLIENTS];
+static TCPServer servers[TCP_MAX_SERVERS];
+static TCPClient clients[TCP_MAX_CLIENTS];
 
 #define GEN_UPPER_BOUND_LOG2 12
 #define GEN_UPPER_BOUND (1U << GEN_UPPER_BOUND_LOG2)
@@ -170,7 +170,7 @@ static TCPServer *server_from_handle(TCPHandle handle)
     if (typ != 1)
         return NULL; // Handle is for a client
 
-    if (idx >= MAX_SERVERS)
+    if (idx >= TCP_MAX_SERVERS)
         return NULL;
 
     TCPServer *server = &servers[idx];
@@ -206,7 +206,7 @@ static TCPClient *client_from_handle(TCPHandle handle, TCPServer **server)
 
         // Client is stand-alone
 
-        if (idx >= MAX_CLIENTS)
+        if (idx >= TCP_MAX_CLIENTS)
             return NULL; // Index out of bounds
         client = &clients[idx];
 
@@ -217,7 +217,7 @@ static TCPClient *client_from_handle(TCPHandle handle, TCPServer **server)
         // Client has a parent server
         
         sdx--;
-        if (sdx >= MAX_SERVERS)
+        if (sdx >= TCP_MAX_SERVERS)
             return NULL; // Server index out of bounds
         TCPServer *server_ = &servers[sdx];
 
@@ -237,7 +237,7 @@ static TCPClient *client_from_handle(TCPHandle handle, TCPServer **server)
 
 static TCPServer *get_server_struct(void)
 {
-    for (int i = 0; i < MAX_SERVERS; i++)
+    for (int i = 0; i < TCP_MAX_SERVERS; i++)
         if (servers[i].state == TCP_SERVER_FREE)
             return &servers[i];
     abort();
@@ -245,7 +245,7 @@ static TCPServer *get_server_struct(void)
 
 static TCPClient *get_client_struct(void)
 {
-    for (int i = 0; i < MAX_CLIENTS; i++)
+    for (int i = 0; i < TCP_MAX_CLIENTS; i++)
         if (clients[i].state == TCP_CLIENT_FREE)
             return &clients[i];
     abort();

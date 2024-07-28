@@ -45,6 +45,10 @@ typedef struct Context_Extra {
 
 // This is where you swap in your own project!
 #include "game/utils.c"
+#include "game/config.c"
 #include "game/byte_queue.c"
 #include "game/tcp.c"
+#include "game/input.c"
 #include "game/game.c"
+#include "game/rollback.c"
+#include "game/entry.c"
