@@ -30,7 +30,7 @@ void input_queue_push(Input input)
         abort();
     }
 
-    if (input.time < get_current_frame_index()) {
+    if (input.time < oldest_game_state.frame_index) {
         printf("Input is too old\n");
         abort();
     }

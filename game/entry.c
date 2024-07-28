@@ -95,9 +95,8 @@ void main_menu_loop(void)
             case 0:
             is_server = true;
             multiplayer = false;
-            printf("Single player mode\n");
             self_snake_index = 0;
-            create_snake(&latest_game_state);
+            spawn_snake(&latest_game_state);
             current_view = VIEW_PLAY;
             break;
             case 1:
@@ -184,10 +183,9 @@ void wait_for_players_loop(void)
          */
 
         init_game_state(&latest_game_state);
-        int num_players = count_client_handles();
-        create_snake(&latest_game_state);
+        int num_players = 1 + count_client_handles();
         for (int i = 0; i < num_players; i++)
-            create_snake(&latest_game_state);
+            spawn_snake(&latest_game_state);
         memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
 
         self_snake_index = 0;
@@ -200,11 +198,12 @@ void wait_for_players_loop(void)
             } else {
                 j++;
             }
-           
-            u32 buffer;
+
+            u64 time = htonll(get_absolute_time_us());
+            tcp_client_write(client_handles[i], &time, sizeof(time));
 
             // Send the player count
-            buffer = htonl(num_players);
+            u32 buffer = htonl(num_players);
             tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
 
             // Send the index associated to this client
@@ -223,7 +222,7 @@ void wait_for_players_loop(void)
                 tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
 
                 assert(s->body_len == 0); // We are assuming the starting size is 0. If that
-                                        // wasn't the case we would need to send the body
+                                          // wasn't the case we would need to send the body
             }
 
             j++;
@@ -251,10 +250,11 @@ void connecting_loop(void)
     }
 
     if (server_handle != TCP_INVALID) {
-        
+
         InitialGameStateMessage initial;
         int result = poll_for_initial_state(&initial);
         switch (result) {
+
             case -1:
             // Server disconnected
             // TODO
@@ -263,16 +263,31 @@ void connecting_loop(void)
             break;
 
             case 1:
-            // State received
-            // TODO: Validate and init the game state
-            self_snake_index = (int) initial.self_index;
-            current_view = VIEW_PLAY;
-            printf("CONNECTED\n");
+            {
+                /*
+                 * State received
+                 */
+
+                init_game_state(&latest_game_state);
+                for (int i = 0; i < initial.num_snakes; i++)
+                    init_snake(&latest_game_state.snakes[i],
+                               initial.snakes[i].head_x,
+                               initial.snakes[i].head_y);
+                memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
+
+                u64 current_time_us = get_absolute_time_us();
+                if (current_time_us > initial.time_us) {
+                    u32 latency_frames = (float) (current_time_us - initial.time_us) * FPS / 1000000;
+                    latest_game_state.frame_index = latency_frames;
+                    printf("latency_frames=%d\n", latency_frames);
+                }
+
+                self_snake_index = (int) initial.self_index;
+                current_view = VIEW_PLAY;
+            }
             break;
 
-            case 0:
-            // No message
-            break;
+            case 0: /* No message */ break;
         }
 
     } else if (done_connecting()) {

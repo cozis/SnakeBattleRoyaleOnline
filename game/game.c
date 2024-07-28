@@ -74,14 +74,9 @@ u64 get_random_from_game(GameState *game)
     return game->seed;
 }
 
-void create_snake(GameState *game)
+void init_snake(Snake *s, u32 x, u32 y)
 {
-    Snake *s = find_unused_snake_slot(game);
     assert(s && !s->used);
-
-    u32 x = get_random_from_game(game) % WORLD_W;
-    u32 y = get_random_from_game(game) % WORLD_H;
-
     s->used = true;
     s->dir = DIR_LEFT;
     s->head_x = x;
@@ -91,6 +86,17 @@ void create_snake(GameState *game)
     s->iter_index = 0;
     s->iter_x = 0;
     s->iter_y = 0;
+}
+
+void spawn_snake(GameState *game)
+{
+    Snake *s = find_unused_snake_slot(game);
+    assert(s && !s->used);
+
+    u32 x = get_random_from_game(game) % WORLD_W;
+    u32 y = get_random_from_game(game) % WORLD_H;
+
+    init_snake(s, x, y);
 }
 
 void change_snake_direction(Snake *s, Direction d)
@@ -234,7 +240,6 @@ bool location_occupied_by_snake_or_apple(GameState *game, u32 x, u32 y)
 
 bool choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
 {
-    printf("Apple seed %d\n", game->seed);
     for (int i = 0; i < 1000; i++) {
         u32 x = get_random_from_game(game) % WORLD_W;
         u32 y = get_random_from_game(game) % WORLD_H;

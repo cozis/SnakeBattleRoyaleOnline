@@ -57,6 +57,7 @@ typedef struct { // TODO: Make sure there is no padding
 } InitialSnakeStateMessage;
 
 typedef struct { // TODO: Make sure there is no padding
+    u64 time_us;
     u32 num_snakes;
     u32 self_index;
     InitialSnakeStateMessage snakes[MAX_SNAKES];
@@ -71,6 +72,7 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
     tcp_client_poll(server_handle, 0);
     for (;;) {
         TCPEvent event = tcp_client_event(server_handle);
+
         if (event.type == TCP_EVENT_NONE)
             return 0;
 
@@ -81,24 +83,30 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 
         string input_buffer = tcp_client_get_input(server_handle);
 
-        if (input_buffer.count < 2 * sizeof(u32))
+        printf("Buffer has %d bytes\n", input_buffer.count);
+
+        if (input_buffer.count < sizeof(u64) + 2 * sizeof(u32))
             return 0;
 
-        memcpy(initial, input_buffer.data, 2 * sizeof(u32));
+        memcpy(initial, input_buffer.data, sizeof(u64) +  2 * sizeof(u32));
+        initial->time_us    = ntohll(initial->time_us);
         initial->num_snakes = ntohl(initial->num_snakes);
         initial->self_index = ntohl(initial->self_index);
 
-        if (input_buffer.count < 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage))
+        if (input_buffer.count < sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage))
             return 0;
 
         memcpy(initial, input_buffer.data, sizeof(InitialGameStateMessage));
+        initial->time_us    = ntohll(initial->time_us);
+        initial->num_snakes = ntohl(initial->num_snakes);
+        initial->self_index = ntohl(initial->self_index);
 
         for (int i = 0; i < initial->num_snakes; i++) {
             initial->snakes[i].head_x = ntohl(initial->snakes[i].head_x);
-            initial->snakes[i].head_x = ntohl(initial->snakes[i].head_x);
+            initial->snakes[i].head_y = ntohl(initial->snakes[i].head_y);
         }
 
-        tcp_client_read(server_handle, 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage));
+        tcp_client_read(server_handle, sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage));
 
         // TODO: May need to handle other messaged
         return 1;
@@ -122,9 +130,12 @@ void connect_routine(Thread *thread)
 {
     (void) thread;
     for (;;) {
+        printf("Waiting for connect request\n");
         binary_semaphore_wait(&connect_request_available_semaphore);
         if (connect_thread_should_quit) break;
+        printf("Received connect request\n");
         connect_result = tcp_client_create(STR("127.0.0.1"), TCP_PORT);
+        printf("Connection completed\n");
         atomic_store(&connect_result_available, true);
         binary_semaphore_signal(&connect_result_available_semaphore);
     }
@@ -268,7 +279,7 @@ bool wait_for_players(void)
         return false;
 
     compact_client_handles();
-    return false;
+    return true;
 }
 
 void broadcast_input_to_clients(Input input)
