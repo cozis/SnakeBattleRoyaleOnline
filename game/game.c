@@ -333,10 +333,10 @@ void draw_snake(Snake *s, float offset_x, float offset_y, float scale)
 
             float rotate = -1;
             switch (s->dir) {
-                case DIR_UP   : target_rotate = 1; break;
-                case DIR_DOWN : target_rotate = 3; break;
-                case DIR_LEFT : target_rotate = 0; break;
-                case DIR_RIGHT: target_rotate = 2; break;
+                case DIR_UP   : rotate = 1; break;
+                case DIR_DOWN : rotate = 3; break;
+                case DIR_LEFT : rotate = 0; break;
+                case DIR_RIGHT: rotate = 2; break;
             }
 
             draw_subimage(sprite_sheet, rotate,

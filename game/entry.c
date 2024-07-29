@@ -93,6 +93,7 @@ void main_menu_loop(void)
     if (submit) {
         switch (cursor) {
             case 0:
+            input_queue_init();
             is_server = true;
             multiplayer = false;
             self_snake_index = 0;
@@ -100,6 +101,7 @@ void main_menu_loop(void)
             current_view = VIEW_PLAY;
             break;
             case 1:
+            input_queue_init();
             if (start_waiting_for_players(1)) {
                 is_server = true;
                 multiplayer = true;
@@ -110,6 +112,7 @@ void main_menu_loop(void)
             }
             break;
             case 2:
+            input_queue_init();
             is_server = false;
             multiplayer = true;
             current_view = VIEW_CONNECTING;
