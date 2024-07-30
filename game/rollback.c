@@ -123,11 +123,13 @@ void recalculate_latest_state(void)
 
 void apply_input_to_game(Input input)
 {
-    if (input.time < oldest_game_state.frame_index) {
-        printf("Input is too old\n");
-        abort();
+    if (multiplayer) {
+        if (input.time < oldest_game_state.frame_index) {
+            printf("Input is too old\n");
+            abort();
+        }
+        input_queue_push(input);
     }
-    input_queue_push(input);
     if (input.time == latest_game_state.frame_index)
         apply_input_to_game_instance(&latest_game_state, input);
 }

@@ -94,6 +94,7 @@ void main_menu_loop(void)
         switch (cursor) {
             case 0:
             input_queue_init();
+            init_game_state(&latest_game_state);
             is_server = true;
             multiplayer = false;
             self_snake_index = 0;
