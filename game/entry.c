@@ -13,6 +13,7 @@ typedef enum {
     VIEW_PLAY,
     VIEW_COULDNT_CONNECT,
     VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY,
+	VIEW_GAME_SETUP,
 } ViewID;
 
 ViewID current_view = VIEW_MAIN_MENU;
@@ -20,6 +21,132 @@ ViewID current_view = VIEW_MAIN_MENU;
 u32 get_current_player_id(void)
 {
     return self_snake_index;
+}
+
+Rect calc_rect_for_horizontally_centered_text(string text, float text_h, float y)
+{
+	Rect rect;
+	rect.h = text_h;
+
+	Gfx_Text_Metrics metrics = measure_text(font, text, rect.h, v2(1, 1));
+	rect.w = metrics.visual_size.x;
+
+	rect.x = (window.width - rect.w) / 2;
+	rect.y = window.height - rect.h - y;
+
+	return rect;
+}
+
+Rect draw_horizontally_centered_text(string text, float text_h, float y)
+{
+	Rect rect = calc_rect_for_horizontally_centered_text(text, text_h, y);
+	draw_text(font, text, rect.h, v2(rect.x, rect.y), v2(1, 1), COLOR_BLACK);
+	return rect;
+}
+
+void draw_separator(float w_percent, float h, float y)
+{
+	float w = window.width * w_percent;
+	Vector2 p0 = {
+		.x = (window.width - w) / 2,
+		.y = window.height - y,
+	};
+	Vector2 p1 = {
+		.x = p0.x + w,
+		.y = p0.y,
+	};
+	draw_line(p0, p1, h, COLOR_BLACK);
+}
+
+void draw_rect_2(Rect rect, Vector4 color)
+{
+	draw_rect(v2(rect.x, rect.y), v2(rect.w, rect.h), color);
+}
+
+void game_setup_loop(void)
+{
+	static int currently_selected_player_count = 2;
+
+	float pad = 10;
+	float y = 2 * pad;
+	float text_h = 30;
+
+	text_h = 30;
+	draw_horizontally_centered_text(STR("GAME SETUP"), text_h, y);
+	y += text_h + 2 * pad;
+
+	draw_separator(1, 2, y);
+	y += pad;
+
+	text_h = 30;
+	draw_horizontally_centered_text(STR("PLAYER COUNT"), text_h, y);
+	y += text_h + pad;
+
+	text_h = 30;
+	Rect players2 = draw_horizontally_centered_text(STR("2 PLAYERS"), text_h, y);
+	y += text_h + pad;
+
+	text_h = 30;
+	Rect players3 = draw_horizontally_centered_text(STR("3 PLAYERS"), text_h, y);
+	y += text_h + pad;
+
+	text_h = 30;
+	Rect players4 = draw_horizontally_centered_text(STR("4 PLAYERS"), text_h, y);
+	y += text_h + pad;
+
+	draw_separator(1, 2, y);
+	y += pad;
+
+	text_h = 30;
+	Rect rect_done = calc_rect_for_horizontally_centered_text(STR("DONE"), text_h, y);
+	draw_rect_2(padded_rect(rect_done, 5), v4(255.0f/0xc4, 255.0f/0xd8, 255.0f/0x3e, 1));
+	draw_horizontally_centered_text(STR("DONE"), text_h, y);
+	y += text_h + 2 * pad;
+
+	if (currently_selected_player_count == 2)
+		draw_rect_border(padded_rect(players2, 5), 3, COLOR_BLACK);
+	if (currently_selected_player_count == 3)
+		draw_rect_border(padded_rect(players3, 5), 3, COLOR_BLACK);
+	if (currently_selected_player_count == 4)
+		draw_rect_border(padded_rect(players4, 5), 3, COLOR_BLACK);
+
+	if (mouse_in_rect(padded_rect(players2, 5))
+		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
+		&& currently_selected_player_count != 2) {
+		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+		currently_selected_player_count = 2;
+	}
+
+	if (mouse_in_rect(padded_rect(players3, 5))
+		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
+		&& currently_selected_player_count != 3) {
+		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+		currently_selected_player_count = 3;
+	}
+
+	if (mouse_in_rect(padded_rect(players4, 5))
+		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
+		&& currently_selected_player_count != 4) {
+		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+		currently_selected_player_count = 4;
+	}
+
+	if (mouse_in_rect(padded_rect(rect_done, 5))
+		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)) {
+		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+
+		input_queue_init();
+		if (start_waiting_for_players(1)) {
+			is_server = true;
+			multiplayer = true;
+			current_view = VIEW_WAITING_FOR_PLAYERS;
+		} else {
+			abort();
+			// TODO: An error occurred
+		}
+
+		current_view = VIEW_WAITING_FOR_PLAYERS;
+	}
 }
 
 void main_menu_loop(void)
@@ -102,15 +229,7 @@ void main_menu_loop(void)
             current_view = VIEW_PLAY;
             break;
             case 1:
-            input_queue_init();
-            if (start_waiting_for_players(1)) {
-                is_server = true;
-                multiplayer = true;
-                current_view = VIEW_WAITING_FOR_PLAYERS;
-            } else {
-                abort();
-                // TODO: An error occurred
-            }
+			current_view = VIEW_GAME_SETUP;
             break;
             case 2:
 			{
@@ -412,6 +531,10 @@ int entry(int argc, char **argv)
             case VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY:
             message_and_button_loop(STR("Server disconnected unexpectedly"), STR("MAIN MENU"), VIEW_MAIN_MENU);
             break;
+
+			case VIEW_GAME_SETUP:
+			game_setup_loop();
+			break;
         }
 
         os_update();

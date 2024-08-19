@@ -86,7 +86,8 @@ extern "C" void steam_free(void)
 
 extern "C" void steam_reset(void)
 {
-	// TODO
+	steam_listen_stop();
+	steam_connect_stop();
 }
 
 extern "C" void steam_update(void)
@@ -165,6 +166,11 @@ extern "C" bool steam_listen_start(void)
 {
 	if (listen_socket != k_HSteamListenSocket_Invalid)
 		return false;
+	
+	if (SteamNetworkingSockets() == NULL) {
+		os_writes(OS_STDOUT, "SteamNetworkingSockets() not available\n");
+		return false;
+	}
 
 	SteamNetworkingConfigValue_t option;
 	option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*) SteamNetConnectionStatusChangedCallback);
@@ -180,14 +186,23 @@ extern "C" bool steam_listen_start(void)
 
 extern "C" void steam_listen_stop(void)
 {
-	// TODO: Close connections in the accepted queue
-	SteamNetworkingSockets()->CloseListenSocket(listen_socket);
-	listen_socket = k_HSteamListenSocket_Invalid;
+	if (listen_socket != k_HSteamListenSocket_Invalid) {
+
+		for (int i = 0; i < accepted_queue_size; i++) {
+			uint32_t handle = accepted_queue[(accepted_queue_head + i) % ACCEPT_QUEUE_SIZE];
+			steam_close_accepted_connection(handle);
+		}
+		accepted_queue_head = 0;
+		accepted_queue_size = 0;
+
+		SteamNetworkingSockets()->CloseListenSocket(listen_socket);
+		listen_socket = k_HSteamListenSocket_Invalid;
+	}
 }
 
 extern "C" void steam_close_accepted_connection(uint32_t handle)
 {
-	// TODO
+	SteamNetworkingSockets()->CloseConnection(handle, 0, "oopsies", true);
 }
 
 extern "C" uint32_t steam_accept_connection(void)
@@ -244,9 +259,11 @@ extern "C" bool steam_connect_start(uint64_t peer_id)
 
 extern "C" void steam_connect_stop(void)
 {
-	SteamNetworkingSockets()->CloseConnection(connect_socket, 0, "oopsies", true);
-	connect_socket = k_HSteamNetConnection_Invalid;
-	connect_complete = false;
+	if (connect_socket != k_HSteamNetConnection_Invalid) {
+		SteamNetworkingSockets()->CloseConnection(connect_socket, 0, "oopsies", true);
+		connect_socket = k_HSteamNetConnection_Invalid;
+		connect_complete = false;
+	}
 }
 
 extern "C" int steam_connect_status(void)
@@ -284,10 +301,6 @@ extern "C" void *steam_recv(uint32_t conn, int *len)
 	SteamNetworkingMessage_t *message;
 	int num_messages = SteamNetworkingSockets()->ReceiveMessagesOnConnection(conn, &message, 1);
 	if (num_messages < 1) {
-		if (num_messages == 0)
-			os_writes(OS_STDOUT, "message count is 0\n");
-		else
-			os_writes(OS_STDOUT, "message count is negative\n");
 		*len = 0;
 		return NULL;
 	}
