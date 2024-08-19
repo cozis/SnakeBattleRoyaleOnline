@@ -113,11 +113,18 @@ void main_menu_loop(void)
             }
             break;
             case 2:
-            input_queue_init();
-            is_server = false;
-            multiplayer = true;
-            current_view = VIEW_CONNECTING;
-            start_connecting();
+			{
+				uint64_t peer_id = 76561199756405394ULL;
+				if (net_connect_start(peer_id)) {
+					input_queue_init();
+        		    is_server = false;
+    	    	    multiplayer = true;
+	            	current_view = VIEW_CONNECTING;
+				} else {
+					// TODO
+					abort();
+				}
+			}
             break;
             case 3:
             window.should_close = true;
@@ -180,6 +187,8 @@ void message_and_button_loop(string msg, string btn, ViewID view)
 
 void wait_for_players_loop(void)
 {
+	net_update();
+
     if (wait_for_players()) {
 
         /*
@@ -197,25 +206,25 @@ void wait_for_players_loop(void)
         // Send player positions to clients
         for (int i = 0, j = 0; i < MAX_CLIENTS; i++) {
 
-            if (client_handles[i] == TCP_INVALID) {
+            if (client_data[i].handle == STEAM_HANDLE_INVALID) {
                 continue;
             } else {
                 j++;
             }
 
             u64 time = htonll(get_absolute_time_us());
-            tcp_client_write(client_handles[i], &time, sizeof(time));
+            net_write(client_data[i].handle, &time, sizeof(time));
 
             u64 seed = htonll(latest_game_state.seed);
-            tcp_client_write(client_handles[i], &seed, sizeof(seed));
+            net_write(client_data[i].handle, &seed, sizeof(seed));
 
             // Send the player count
             u32 buffer = htonl(num_players);
-            tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
+            net_write(client_data[i].handle, &buffer, sizeof(buffer));
 
             // Send the index associated to this client
             buffer = htonl(j); // <-- This is j and not i
-            tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
+            net_write(client_data[i].handle, &buffer, sizeof(buffer));
 
             // Send the player information
             for (int k = 0; k < MAX_SNAKES; k++) {
@@ -223,10 +232,10 @@ void wait_for_players_loop(void)
                 if (!s->used) continue;
 
                 buffer = htonl(s->head_x);
-                tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
+                net_write(client_data[i].handle, &buffer, sizeof(buffer));
 
                 buffer = htonl(s->head_y);
-                tcp_client_write(client_handles[i], &buffer, sizeof(buffer));
+                net_write(client_data[i].handle, &buffer, sizeof(buffer));
 
                 assert(s->body_len == 0); // We are assuming the starting size is 0. If that
                                           // wasn't the case we would need to send the body
@@ -242,73 +251,83 @@ void wait_for_players_loop(void)
         message_and_button_loop(STR("Waiting for players"), STR("CANCEL"), VIEW_MAIN_MENU);
         if (current_view != VIEW_WAITING_FOR_PLAYERS) {
             stop_waiting_for_players();
-            network_reset();
+            net_reset();
         }
     }
 }
 
 void connecting_loop(void)
 {
-    message_and_button_loop(STR("Connecting..."), STR("CANCEL"), VIEW_MAIN_MENU);
-    if (current_view == VIEW_MAIN_MENU) {
-        stop_connecting();
-        network_reset();
-        return;
-    }
+	net_update();
 
-    if (server_handle != TCP_INVALID) {
+	switch (net_connect_status()) {
 
-        InitialGameStateMessage initial;
-        int result = poll_for_initial_state(&initial);
-        switch (result) {
+		case CONNECT_PENDING:
+		message_and_button_loop(STR("Connecting..."), STR("CANCEL"), VIEW_MAIN_MENU);
+		if (current_view == VIEW_MAIN_MENU) {
+			net_connect_stop();
+			net_reset();
+			return;
+		}
+		break;
 
-            case -1:
-            // Server disconnected
-            // TODO
-            current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
-            network_reset();
-            break;
+		case CONNECT_FAILED:
+		current_view = VIEW_COULDNT_CONNECT;
+		net_reset();
+		return;
 
-            case 1:
-            {
-                /*
-                 * State received
-                 */
+		case CONNECT_OK:
+		{
+			InitialGameStateMessage initial;
+			int result = poll_for_initial_state(&initial);
+			switch (result) {
 
-                init_game_state(&latest_game_state);
-                for (int i = 0; i < initial.num_snakes; i++)
-                    init_snake(&latest_game_state.snakes[i],
-                               initial.snakes[i].head_x,
-                               initial.snakes[i].head_y);
-                latest_game_state.seed = initial.seed;
-                memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
+				case -1:
+				// Server disconnected
+				// TODO
+				current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+				net_reset();
+				break;
 
-                u64 current_time_us = get_absolute_time_us();
-                if (current_time_us > initial.time_us) {
-                    u32 latency_frames = (float) (current_time_us - initial.time_us) * FPS / 1000000;
-                    latest_game_state.frame_index = latency_frames;
-                    printf("latency_frames=%d\n", latency_frames);
-                }
+				case 1:
+				{
+					/*
+					* State received
+					*/
 
-                self_snake_index = (int) initial.self_index;
-                current_view = VIEW_PLAY;
-            }
-            break;
+					init_game_state(&latest_game_state);
+					for (int i = 0; i < initial.num_snakes; i++)
+						init_snake(&latest_game_state.snakes[i],
+								initial.snakes[i].head_x,
+								initial.snakes[i].head_y);
+					latest_game_state.seed = initial.seed;
+					memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
 
-            case 0: /* No message */ break;
-        }
+					u64 current_time_us = get_absolute_time_us();
+					if (current_time_us > initial.time_us) {
+						u32 latency_frames = (float) (current_time_us - initial.time_us) * FPS / 1000000;
+						latest_game_state.frame_index = latency_frames;
+						printf("latency_frames=%d\n", latency_frames);
+					}
 
-    } else if (done_connecting()) {
+					self_snake_index = (int) initial.self_index;
+					current_view = VIEW_PLAY;
+				}
+				break;
 
-        if (server_handle == TCP_INVALID) {
-            current_view = VIEW_COULDNT_CONNECT;
-            network_reset();
-            return;
-        }
-
-        init_game_state(&latest_game_state);
-        memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
-    }
+				case 0:
+				/* No message */
+				message_and_button_loop(STR("Downloading Initial State..."), STR("CANCEL"), VIEW_MAIN_MENU);
+				if (current_view == VIEW_MAIN_MENU) {
+					net_connect_stop();
+					net_reset();
+					return;
+				}
+				break;
+			}
+		}
+		break;
+	}
 }
 
 void play_loop(void)
@@ -318,7 +337,7 @@ void play_loop(void)
         apply_input_to_game(input);
         if (input.player == 0 && input.disconnect) {
             current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
-            network_reset();
+            net_reset();
             return;
         }
     }
@@ -332,7 +351,7 @@ void play_loop(void)
 
     if (game_complete()) {
         current_view = VIEW_MAIN_MENU;
-        network_reset();
+        net_reset();
     }
 }
 
@@ -345,7 +364,7 @@ int entry(int argc, char **argv)
 	window.y = 90;
 	window.clear_color = hex_to_rgba(0x6495EDff);
 
-    network_init();
+    net_init();
 
     string font_file = STR("assets/Minecraft.ttf");
     font = load_font_from_disk(font_file, get_heap_allocator());
@@ -402,7 +421,7 @@ int entry(int argc, char **argv)
         animate_rect_to_target(&menu_box, target_menu_box, elapsed, 40);
     }
 
-    network_free();
+    net_free();
     destroy_font(font);
 	return 0;
 }

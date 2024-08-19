@@ -247,7 +247,6 @@ bool choose_apple_location(GameState *game, u32 *out_x, u32 *out_y)
         u32 x = get_random_from_game(game) % WORLD_W;
         u32 y = get_random_from_game(game) % WORLD_H;
         if (!location_occupied_by_snake_or_apple(game, x, y)) {
-            printf("Apple location (%d, %d)\n", x, y);
             if (out_x) *out_x = x;
             if (out_y) *out_y = y;
             return true;

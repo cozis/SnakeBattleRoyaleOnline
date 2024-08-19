@@ -20,6 +20,12 @@ void byte_queue_free(ByteQueue *q)
         dealloc(get_heap_allocator(), q->data);
 }
 
+void byte_queue_reset(ByteQueue *q)
+{
+	byte_queue_free(q);
+	byte_queue_init(q);
+}
+
 size_t byte_queue_used_space(ByteQueue *q)
 {
     return q->size;

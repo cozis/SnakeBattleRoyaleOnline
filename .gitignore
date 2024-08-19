@@ -19,6 +19,8 @@ sdk*
 *.VC.db
 *.obj
 *.ilk
+*.lib
+*.dll
 *.spall
 release/
 output.txt
