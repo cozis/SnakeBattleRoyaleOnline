@@ -63,100 +63,103 @@ void draw_rect_2(Rect rect, Vector4 color)
 	draw_rect(v2(rect.x, rect.y), v2(rect.w, rect.h), color);
 }
 
+typedef struct {
+	string text;
+	Rect   rect;
+} MenuEntry;
+
+bool draw_menu(MenuEntry *entries, int num_entries, int *cursor)
+{
+	int pad_y = 30;
+    int text_h = 40;
+
+    Gfx_Text_Metrics metrics;
+
+    for (int i = 0; i < num_entries; i++) {
+        Gfx_Text_Metrics metrics = measure_text(font, entries[i].text, text_h, v2(1, 1));
+        entries[i].rect.w = metrics.visual_size.x;
+        entries[i].rect.h = metrics.visual_size.y;
+    }
+
+    float total_h = (num_entries - 1) * pad_y;
+    for (int i = 0; i < num_entries; i++)
+        total_h += entries[i].rect.h;
+    
+    for (int i = 0; i < num_entries; i++) {
+        entries[i].rect.x = (window.width - entries[i].rect.w) / 2;
+        entries[i].rect.y = (window.height - total_h) / 2 + (num_entries - i - 1) * (text_h + pad_y);
+    }
+
+    bool submit = false;
+
+    for (int i = 0; i < num_entries; i++) {
+        if (mouse_in_rect(padded_rect(entries[i].rect, 10))) {
+            if (*cursor != i) {
+                play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+                *cursor = i;
+            }
+            submit = submit || is_key_just_pressed(MOUSE_BUTTON_LEFT);
+            break;
+        }
+    }
+
+    if (is_key_just_pressed(KEY_ARROW_UP)) {
+        if (*cursor > 0) {
+            (*cursor)--;
+            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+        }
+    }
+
+    if (is_key_just_pressed(KEY_ARROW_DOWN)) {
+        if (*cursor < num_entries-1) {
+            (*cursor)++;
+            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+        }
+    }
+
+    target_menu_box = padded_rect(entries[*cursor].rect, 10);
+
+    if (is_key_just_pressed(KEY_SPACEBAR))
+        submit = true;
+	
+	for (int i = 0; i < num_entries; i++)
+        draw_text(font, entries[i].text, text_h, v2(entries[i].rect.x, entries[i].rect.y), v2(1, 1), *cursor == i ? COLOR_RED : COLOR_BLACK);
+    
+    draw_rect_border(menu_box, 3, COLOR_BLACK);
+
+	if (submit)
+		play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+
+	return submit;
+}
+
 void game_setup_loop(void)
 {
-	static int currently_selected_player_count = 2;
+	MenuEntry entries[] = {
+		{.text=STR("2 PLAYERS")},
+		{.text=STR("3 PLAYERS")},
+		{.text=STR("4 PLAYERS")},
+	};
+	static int cursor = 0;
+	if (draw_menu(entries, COUNTOF(entries), &cursor)) {
 
-	float pad = 10;
-	float y = 2 * pad;
-	float text_h = 30;
-
-	text_h = 30;
-	draw_horizontally_centered_text(STR("GAME SETUP"), text_h, y);
-	y += text_h + 2 * pad;
-
-	draw_separator(1, 2, y);
-	y += pad;
-
-	text_h = 30;
-	draw_horizontally_centered_text(STR("PLAYER COUNT"), text_h, y);
-	y += text_h + pad;
-
-	text_h = 30;
-	Rect players2 = draw_horizontally_centered_text(STR("2 PLAYERS"), text_h, y);
-	y += text_h + pad;
-
-	text_h = 30;
-	Rect players3 = draw_horizontally_centered_text(STR("3 PLAYERS"), text_h, y);
-	y += text_h + pad;
-
-	text_h = 30;
-	Rect players4 = draw_horizontally_centered_text(STR("4 PLAYERS"), text_h, y);
-	y += text_h + pad;
-
-	draw_separator(1, 2, y);
-	y += pad;
-
-	text_h = 30;
-	Rect rect_done = calc_rect_for_horizontally_centered_text(STR("DONE"), text_h, y);
-	draw_rect_2(padded_rect(rect_done, 5), v4(255.0f/0xc4, 255.0f/0xd8, 255.0f/0x3e, 1));
-	draw_horizontally_centered_text(STR("DONE"), text_h, y);
-	y += text_h + 2 * pad;
-
-	if (currently_selected_player_count == 2)
-		draw_rect_border(padded_rect(players2, 5), 3, COLOR_BLACK);
-	if (currently_selected_player_count == 3)
-		draw_rect_border(padded_rect(players3, 5), 3, COLOR_BLACK);
-	if (currently_selected_player_count == 4)
-		draw_rect_border(padded_rect(players4, 5), 3, COLOR_BLACK);
-
-	if (mouse_in_rect(padded_rect(players2, 5))
-		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
-		&& currently_selected_player_count != 2) {
-		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-		currently_selected_player_count = 2;
-	}
-
-	if (mouse_in_rect(padded_rect(players3, 5))
-		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
-		&& currently_selected_player_count != 3) {
-		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-		currently_selected_player_count = 3;
-	}
-
-	if (mouse_in_rect(padded_rect(players4, 5))
-		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)
-		&& currently_selected_player_count != 4) {
-		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-		currently_selected_player_count = 4;
-	}
-
-	if (mouse_in_rect(padded_rect(rect_done, 5))
-		&& is_key_just_pressed(MOUSE_BUTTON_LEFT)) {
-		play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
+		int num_players = cursor+2;
 
 		input_queue_init();
-		if (start_waiting_for_players(1)) {
-			is_server = true;
-			multiplayer = true;
-			current_view = VIEW_WAITING_FOR_PLAYERS;
-		} else {
+		if (!start_waiting_for_players(num_players-1)) {
 			abort();
 			// TODO: An error occurred
 		}
 
+		is_server = true;
+		multiplayer = true;
 		current_view = VIEW_WAITING_FOR_PLAYERS;
 	}
 }
 
 void main_menu_loop(void)
 {
-    typedef struct {
-        string text;
-        Rect   rect;
-    } MainMenuEntry;
-
-    static MainMenuEntry entries[] = {
+    static MenuEntry entries[] = {
         {.text=LIT("PLAY")},
         {.text=LIT("HOST")},
         {.text=LIT("JOIN")},
@@ -165,59 +168,7 @@ void main_menu_loop(void)
 
     static int cursor = 0;
 
-    int pad_y = 30;
-    int text_h = 40;
-
-    Gfx_Text_Metrics metrics;
-
-    for (int i = 0; i < COUNTOF(entries); i++) {
-        Gfx_Text_Metrics metrics = measure_text(font, entries[i].text, text_h, v2(1, 1));
-        entries[i].rect.w = metrics.visual_size.x;
-        entries[i].rect.h = metrics.visual_size.y;
-    }
-
-    float total_h = (COUNTOF(entries) - 1) * pad_y;
-    for (int i = 0; i < COUNTOF(entries); i++)
-        total_h += entries[i].rect.h;
-    
-    for (int i = 0; i < COUNTOF(entries); i++) {
-        entries[i].rect.x = (window.width - entries[i].rect.w) / 2;
-        entries[i].rect.y = (window.height - total_h) / 2 + (COUNTOF(entries) - i - 1) * (text_h + pad_y);
-    }
-
-    bool submit = false;
-
-    for (int i = 0; i < COUNTOF(entries); i++) {
-        if (mouse_in_rect(padded_rect(entries[i].rect, 10))) {
-            if (cursor != i) {
-                play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-                cursor = i;
-            }
-            submit = submit || is_key_just_pressed(MOUSE_BUTTON_LEFT);
-            break;
-        }
-    }
-
-    if (is_key_just_pressed(KEY_ARROW_UP)) {
-        if (cursor > 0) {
-            cursor--;
-            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-        }
-    }
-
-    if (is_key_just_pressed(KEY_ARROW_DOWN)) {
-        if (cursor < COUNTOF(entries)-1) {
-            cursor++;
-            play_one_audio_clip(STR("assets/sounds/mixkit-game-ball-tap-2073.wav"));
-        }
-    }
-
-    target_menu_box = padded_rect(entries[cursor].rect, 10);
-
-    if (is_key_just_pressed(KEY_SPACEBAR))
-        submit = true;
-
-    if (submit) {
+    if (draw_menu(entries, COUNTOF(entries), &cursor)) {
         switch (cursor) {
             case 0:
             input_queue_init();
@@ -249,13 +200,7 @@ void main_menu_loop(void)
             window.should_close = true;
             break;
         }
-        play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
     }
-
-    for (int i = 0; i < COUNTOF(entries); i++)
-        draw_text(font, entries[i].text, text_h, v2(entries[i].rect.x, entries[i].rect.y), v2(1, 1), cursor == i ? COLOR_RED : COLOR_BLACK);
-    
-    draw_rect_border(menu_box, 3, COLOR_BLACK);
 }
 
 void message_and_button_loop(string msg, string btn, ViewID view)

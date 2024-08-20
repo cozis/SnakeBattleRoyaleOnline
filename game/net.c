@@ -93,6 +93,17 @@ void client_update(ClientData *client)
 
 void net_update(void)
 {
+	// Mark all disconnected clients as "failed"
+	SteamHandle handle;
+	while ((handle = steam_get_disconnect_message()) != STEAM_HANDLE_INVALID) {
+		for (int i = 0; i < MAX_CLIENTS; i++) {
+			if (client_data[i].handle == handle) {
+				client_data[i].failed = true;
+				break;
+			}
+		}
+	}
+
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		client_update(&client_data[i]);
 	client_update(&server_data);

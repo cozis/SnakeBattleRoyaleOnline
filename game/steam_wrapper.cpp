@@ -96,6 +96,15 @@ extern "C" void steam_update(void)
 	SteamNetworkingSockets()->RunCallbacks();
 }
 
+typedef enum {
+	API_MODE_NONE,
+	API_MODE_CLIENT,
+	API_MODE_SERVER,
+} APIMode;
+
+
+APIMode api_mode = API_MODE_NONE;
+
 #define ACCEPT_QUEUE_SIZE 32
 static HSteamNetConnection accepted_queue[ACCEPT_QUEUE_SIZE];
 static int accepted_queue_head = 0;
@@ -105,13 +114,46 @@ static HSteamNetConnection connect_socket = k_HSteamNetConnection_Invalid;
 static bool connect_complete = false;
 static bool connect_success  = false;
 
+#define MAX_DISCONNECTED 128
+static HSteamNetConnection disconnected[MAX_DISCONNECTED];
+static int num_disconnected = 0;
+
+void mark_disconnected(HSteamNetConnection handle)
+{
+	// Make sure handles aren't marked twice
+	int i = 0;
+	while (i < num_disconnected && disconnected[i] != handle)
+		i++;
+	if (i < num_disconnected) {
+		os_writes(OS_STDOUT, "Handle marked twice as disconnected\n");
+		abort();
+	}
+	if (num_disconnected == MAX_DISCONNECTED) {
+		os_writes(OS_STDOUT, "Disconnect queue full\n");
+		abort();
+	}
+	disconnected[num_disconnected] = handle;
+}
+
+SteamHandle steam_get_disconnect_message(void)
+{
+	if (num_disconnected == 0)
+		return STEAM_HANDLE_INVALID;
+	return disconnected[--num_disconnected];
+}
+
 static void SteamNetConnectionStatusChangedCallback(SteamNetConnectionStatusChangedCallback_t *pInfo)
 {
 	os_writes(OS_STDOUT, "Connection status changed!\n");
+	if (api_mode == API_MODE_NONE)
+		os_writes(OS_STDOUT, "Connection status changed while in NONE mode\n");
+
 	switch (pInfo->m_info.m_eState) {
 
 		case k_ESteamNetworkingConnectionState_Connecting:
-		{
+		if (api_mode == API_MODE_CLIENT) {
+			os_writes(OS_STDOUT, "Socket connecting while in client mode\n");
+		} else {
 			if (accepted_queue_size == ACCEPT_QUEUE_SIZE) {
 				os_writes(OS_STDOUT, "Incoming connection ... Discarded\n");
 				SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 0, "oopsies", true);
@@ -124,14 +166,12 @@ static void SteamNetConnectionStatusChangedCallback(SteamNetConnectionStatusChan
 
 		case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
 		os_writes(OS_STDOUT, "PROBLEM DETECTED LOCALLY\n");
-		// TODO
-		//os_writes(OS_STDOUT, "Connection error\n");
-		//SteamNetworkingSockets()->CloseConnection(pInfo->m_hConn, 0, "oopsies", true);
+		mark_disconnected(pInfo->m_hConn);
 		break;
 
 		case k_ESteamNetworkingConnectionState_Connected:
 		os_writes(OS_STDOUT, "CONNECTED\n");
-		if (listen_socket == k_HSteamListenSocket_Invalid) {
+		if (api_mode == API_MODE_CLIENT) {
 			connect_complete = true;
 			connect_success = true;
 		} else {
@@ -142,13 +182,18 @@ static void SteamNetConnectionStatusChangedCallback(SteamNetConnectionStatusChan
 
 		case k_ESteamNetworkingConnectionState_ClosedByPeer:
 		os_writes(OS_STDOUT, "CLOSED BY PEER\n");
-		// We were rejected by the server
-		connect_complete = true;
-		connect_success = false;
+		if (api_mode == API_MODE_CLIENT) {
+			// We were rejected by the server
+			connect_complete = true;
+			connect_success = false;
+		} else {
+			mark_disconnected(pInfo->m_hConn);
+		}
 		break;
 
 		case k_ESteamNetworkingConnectionState_None:
 		os_writes(OS_STDOUT, "NONE .. API error?\n");
+		mark_disconnected(pInfo->m_hConn); // Does this make sense?
 		break;
 
 		case k_ESteamNetworkingConnectionState_FindingRoute:
@@ -164,6 +209,11 @@ static void SteamNetConnectionStatusChangedCallback(SteamNetConnectionStatusChan
 
 extern "C" bool steam_listen_start(void)
 {
+	if (api_mode != API_MODE_NONE) {
+		os_writes(OS_STDOUT, "Invalid state\n");
+		return false;
+	}
+
 	if (listen_socket != k_HSteamListenSocket_Invalid)
 		return false;
 	
@@ -181,6 +231,7 @@ extern "C" bool steam_listen_start(void)
 		return false;
 	}
 
+	api_mode = API_MODE_SERVER;
 	return true;
 }
 
@@ -198,6 +249,8 @@ extern "C" void steam_listen_stop(void)
 		SteamNetworkingSockets()->CloseListenSocket(listen_socket);
 		listen_socket = k_HSteamListenSocket_Invalid;
 	}
+	if (api_mode == API_MODE_SERVER)
+		api_mode = API_MODE_NONE;
 }
 
 extern "C" void steam_close_accepted_connection(uint32_t handle)
@@ -219,6 +272,11 @@ extern "C" uint32_t steam_accept_connection(void)
 
 extern "C" bool steam_connect_start(uint64_t peer_id)
 {
+	if (api_mode != API_MODE_NONE) {
+		os_writes(OS_STDOUT, "Invalid state\n");
+		return false;
+	}
+
 	if (connect_socket != k_HSteamNetConnection_Invalid)
 		return false;
 
@@ -253,6 +311,7 @@ extern "C" bool steam_connect_start(uint64_t peer_id)
 
 	connect_complete = false;
 	connect_success = false;
+	api_mode = API_MODE_CLIENT;
 	os_writes(OS_STDOUT, "Started connecting\n");
 	return true;
 }
@@ -264,6 +323,8 @@ extern "C" void steam_connect_stop(void)
 		connect_socket = k_HSteamNetConnection_Invalid;
 		connect_complete = false;
 	}
+	if (api_mode == API_MODE_CLIENT)
+		api_mode = API_MODE_NONE;
 }
 
 extern "C" int steam_connect_status(void)
