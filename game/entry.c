@@ -14,6 +14,13 @@ typedef enum {
     VIEW_COULDNT_CONNECT,
     VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY,
 	VIEW_GAME_SETUP,
+	VIEW_CREATING_LOBBY,
+	VIEW_COULDNT_CREATE_LOBBY,
+	VIEW_LOBBY_LIST,
+	VIEW_LOADING_LOBBY_LIST,
+	VIEW_COULDNT_LOAD_LOBBY_LIST,
+	VIEW_JOINING_LOBBY,
+	VIEW_COULDNT_JOIN_LOBBY,
 } ViewID;
 
 ViewID current_view = VIEW_MAIN_MENU;
@@ -133,6 +140,8 @@ bool draw_menu(MenuEntry *entries, int num_entries, int *cursor)
 	return submit;
 }
 
+int num_players__ = -1;
+
 void game_setup_loop(void)
 {
 	MenuEntry entries[] = {
@@ -144,16 +153,47 @@ void game_setup_loop(void)
 	if (draw_menu(entries, COUNTOF(entries), &cursor)) {
 
 		int num_players = cursor+2;
+		num_players__ = num_players;
 
-		input_queue_init();
-		if (!start_waiting_for_players(num_players-1)) {
-			abort();
-			// TODO: An error occurred
+		steam_create_lobby_start(num_players);
+		current_view = VIEW_CREATING_LOBBY;
+	}
+}
+
+void message_and_button_loop(string msg, string btn, ViewID view);
+
+void create_lobby_loop(void)
+{
+	steam_update();
+
+	switch (steam_create_lobby_result()) {
+
+		case 0:
+		message_and_button_loop(STR("Creating Lobby"), STR("CANCEL"), VIEW_MAIN_MENU);
+		if (current_view != VIEW_CREATING_LOBBY) {
+			// TODO: Cleanup
 		}
+		break;
 
-		is_server = true;
-		multiplayer = true;
-		current_view = VIEW_WAITING_FOR_PLAYERS;
+		case 1:
+		{
+			input_queue_init();
+			if (!start_waiting_for_players(num_players__-1)) {
+				abort();
+				// TODO: An error occurred
+			}
+
+			//steam_invite_to_lobby();
+
+			is_server = true;
+			multiplayer = true;
+			current_view = VIEW_WAITING_FOR_PLAYERS;
+		}
+		break;
+
+		case -1:
+		current_view = VIEW_COULDNT_CREATE_LOBBY;
+		break;
 	}
 }
 
@@ -183,18 +223,8 @@ void main_menu_loop(void)
 			current_view = VIEW_GAME_SETUP;
             break;
             case 2:
-			{
-				uint64_t peer_id = 76561199756405394ULL;
-				if (net_connect_start(peer_id)) {
-					input_queue_init();
-        		    is_server = false;
-    	    	    multiplayer = true;
-	            	current_view = VIEW_CONNECTING;
-				} else {
-					// TODO
-					abort();
-				}
-			}
+			steam_list_lobbies_owned_by_friends();
+			current_view = VIEW_LOADING_LOBBY_LIST;
             break;
             case 3:
             window.should_close = true;
@@ -259,61 +289,14 @@ void wait_for_players_loop(void)
          * All players connected
          */
 
-        init_game_state(&latest_game_state);
-        int num_players = 1 + count_client_handles();
-        for (int i = 0; i < num_players; i++)
-            spawn_snake(&latest_game_state);
-        memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
-
-        self_snake_index = 0;
-
-        // Send player positions to clients
-        for (int i = 0, j = 0; i < MAX_CLIENTS; i++) {
-
-            if (client_data[i].handle == STEAM_HANDLE_INVALID) {
-                continue;
-            } else {
-                j++;
-            }
-
-            u64 time = htonll(get_absolute_time_us());
-            net_write(client_data[i].handle, &time, sizeof(time));
-
-            u64 seed = htonll(latest_game_state.seed);
-            net_write(client_data[i].handle, &seed, sizeof(seed));
-
-            // Send the player count
-            u32 buffer = htonl(num_players);
-            net_write(client_data[i].handle, &buffer, sizeof(buffer));
-
-            // Send the index associated to this client
-            buffer = htonl(j); // <-- This is j and not i
-            net_write(client_data[i].handle, &buffer, sizeof(buffer));
-
-            // Send the player information
-            for (int k = 0; k < MAX_SNAKES; k++) {
-                Snake *s = &latest_game_state.snakes[k];
-                if (!s->used) continue;
-
-                buffer = htonl(s->head_x);
-                net_write(client_data[i].handle, &buffer, sizeof(buffer));
-
-                buffer = htonl(s->head_y);
-                net_write(client_data[i].handle, &buffer, sizeof(buffer));
-
-                assert(s->body_len == 0); // We are assuming the starting size is 0. If that
-                                          // wasn't the case we would need to send the body
-            }
-
-            j++;
-        }
-
+        send_initial_state();
         current_view = VIEW_PLAY;
 
     } else {
 
         message_and_button_loop(STR("Waiting for players"), STR("CANCEL"), VIEW_MAIN_MENU);
         if (current_view != VIEW_WAITING_FOR_PLAYERS) {
+			printf("User canceled waiting for players\n");
             stop_waiting_for_players();
             net_reset();
         }
@@ -329,6 +312,7 @@ void connecting_loop(void)
 		case CONNECT_PENDING:
 		message_and_button_loop(STR("Connecting..."), STR("CANCEL"), VIEW_MAIN_MENU);
 		if (current_view == VIEW_MAIN_MENU) {
+			printf("User canceled connection to server\n");
 			net_connect_stop();
 			net_reset();
 			return;
@@ -337,6 +321,7 @@ void connecting_loop(void)
 
 		case CONNECT_FAILED:
 		current_view = VIEW_COULDNT_CONNECT;
+		printf("Connection failed\n");
 		net_reset();
 		return;
 
@@ -350,6 +335,7 @@ void connecting_loop(void)
 				// Server disconnected
 				// TODO
 				current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+				printf("Server disconnected unexpectedly\n");
 				net_reset();
 				break;
 
@@ -358,23 +344,7 @@ void connecting_loop(void)
 					/*
 					* State received
 					*/
-
-					init_game_state(&latest_game_state);
-					for (int i = 0; i < initial.num_snakes; i++)
-						init_snake(&latest_game_state.snakes[i],
-								initial.snakes[i].head_x,
-								initial.snakes[i].head_y);
-					latest_game_state.seed = initial.seed;
-					memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
-
-					u64 current_time_us = get_absolute_time_us();
-					if (current_time_us > initial.time_us) {
-						u32 latency_frames = (float) (current_time_us - initial.time_us) * FPS / 1000000;
-						latest_game_state.frame_index = latency_frames;
-						printf("latency_frames=%d\n", latency_frames);
-					}
-
-					self_snake_index = (int) initial.self_index;
+					start_client_game(&initial);
 					current_view = VIEW_PLAY;
 				}
 				break;
@@ -384,6 +354,7 @@ void connecting_loop(void)
 				message_and_button_loop(STR("Downloading Initial State..."), STR("CANCEL"), VIEW_MAIN_MENU);
 				if (current_view == VIEW_MAIN_MENU) {
 					net_connect_stop();
+					printf("User canceled initial state download\n");
 					net_reset();
 					return;
 				}
@@ -394,19 +365,56 @@ void connecting_loop(void)
 	}
 }
 
+u64 get_target_frame_index();
+u64 last_frame_index_received_from_server = -1;
+
 void play_loop(void)
 {
     poll_for_inputs();
-    for (Input input; get_input(&input); ) {
+
+	Input input;
+	SyncMessage sync = {.empty=true};
+
+    while (get_local_input(&input)) {
         apply_input_to_game(input);
         if (input.player == 0 && input.disconnect) {
             current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+			printf("Server disconnected unexpectedly while reading for inputs\n");
             net_reset();
             return;
         }
     }
+	if (multiplayer) {
+		if (is_server) {
+			while (get_client_input_from_network(&input)) {
+				printf("Client input is from %lld frames ago\n", (s64) get_current_frame_index() - (s64) input.time);
+				apply_input_to_game(input);
+				if (input.player == 0 && input.disconnect) {
+					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+					printf("Server disconnected unexpectedly while reading for inputs\n");
+					net_reset();
+					return;
+				}
+			}
+		} else {
+			while (get_server_input_from_network(&input, &sync)) {
+				
+				if (input.player == 0) {
+					printf("Server input is from %lld frames ago (relative to target) and %lld frames ago relative to current\n", (s64) get_target_frame_index() - (s64) input.time, (s64) get_current_frame_index() - (s64) input.time);
+					last_frame_index_received_from_server = input.time;
+				}
+				apply_input_to_game(input);
+				if (input.player == 0 && input.disconnect) {
+					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+					printf("Server disconnected unexpectedly while reading for inputs\n");
+					net_reset();
+					return;
+				}
+			}
+		}
+	}
 
-    update_game();
+    update_game(sync);
     draw_game();
 
     if (game_apple_consumed_this_frame()) {
@@ -415,8 +423,101 @@ void play_loop(void)
 
     if (game_complete()) {
         current_view = VIEW_MAIN_MENU;
+		printf("Game complete\n");
         net_reset();
     }
+}
+
+void load_lobby_list_loop(void)
+{
+	net_update();
+
+	switch (steam_lobby_list_status()) {
+		case 0:
+		message_and_button_loop(STR("LOADING LOBBY LIST"), STR("MAIN MENU"), VIEW_MAIN_MENU);
+		break;
+
+		case 1:
+		current_view = VIEW_LOBBY_LIST;
+		break;
+
+		case -1:
+		current_view = VIEW_COULDNT_LOAD_LOBBY_LIST;
+		break;
+	}
+}
+
+void list_lobbies_loop(void)
+{
+	Rect r;
+	float y = 10;
+
+	r = draw_horizontally_centered_text(STR("FRIEND'S LOBBY LIST"), 30, y);
+	y += r.h;
+
+	y += 10;
+	draw_separator(0.6, 3, y);
+	y += 10;
+
+	int count = steam_lobby_list_count();
+	//printf("lobby count %d\n", count);
+
+	MenuEntry entries[128];
+	uint64_t lobby_ids[128];
+
+	if (count > COUNTOF(entries)) {
+		printf("Buffer too small\n");
+		abort();
+	}
+
+	for (int i = 0; i < count; i++) {
+		uint64_t lobby_id = steam_get_lobby(i);
+		entries[i].text = STR(steam_get_lobby_title(lobby_id));
+		entries[i].rect = (Rect) {0, 0, 0, 0};
+		lobby_ids[i] = lobby_id;
+	}
+
+	static int cursor = 0;
+	if (draw_menu(entries, count, &cursor)) {
+		uint64_t lobby_id = lobby_ids[cursor];
+		steam_join_lobby_start(lobby_id);
+
+		current_view = VIEW_JOINING_LOBBY;
+	}
+}
+
+void joining_lobby_loop(void)
+{
+	switch (steam_join_lobby_status()) {
+		case 0:
+		message_and_button_loop(STR("Joining Lobby"), STR("Cancel"), VIEW_MAIN_MENU);
+		// TODO: Cleanup
+		break;
+
+		case 1:
+		{
+			uint64_t peer_id = steam_current_lobby_owner();
+			if (net_connect_start(peer_id)) {
+				input_queue_init();
+				is_server = false;
+				multiplayer = true;
+				current_view = VIEW_CONNECTING;
+			} else {
+				// TODO
+				abort();
+			}
+		}
+		break;
+
+		case -1:
+		current_view = VIEW_COULDNT_JOIN_LOBBY;
+		break;
+	}
+}
+
+void prelude(void)
+{
+	net_init();
 }
 
 int entry(int argc, char **argv)
@@ -427,8 +528,6 @@ int entry(int argc, char **argv)
 	window.x = 200;
 	window.y = 90;
 	window.clear_color = hex_to_rgba(0x6495EDff);
-
-    net_init();
 
     string font_file = STR("assets/Minecraft.ttf");
     font = load_font_from_disk(font_file, get_heap_allocator());
@@ -444,6 +543,8 @@ int entry(int argc, char **argv)
         abort();
     }
 
+	float last_frame_time = 1;
+
     while (!window.should_close) {
 
         float64 frame_start_time = os_get_current_time_in_seconds();
@@ -452,15 +553,15 @@ int entry(int argc, char **argv)
         draw_frame.projection = m4_make_orthographic_projection(0, window.width, 0, window.height, -1, 10);
 
         switch (current_view) {
-            
+
             case VIEW_MAIN_MENU:
             main_menu_loop();
             break;
-            
+
             case VIEW_WAITING_FOR_PLAYERS:
             wait_for_players_loop();
             break;
-            
+
             case VIEW_CONNECTING:
             connecting_loop();
             break;
@@ -477,16 +578,51 @@ int entry(int argc, char **argv)
             message_and_button_loop(STR("Server disconnected unexpectedly"), STR("MAIN MENU"), VIEW_MAIN_MENU);
             break;
 
+			case VIEW_CREATING_LOBBY:
+			create_lobby_loop();
+            break;
+
+			case VIEW_COULDNT_CREATE_LOBBY:
+			message_and_button_loop(STR("Couldn't create lobby"), STR("MAIN MENU"), VIEW_MAIN_MENU);
+			break;
+
 			case VIEW_GAME_SETUP:
 			game_setup_loop();
 			break;
+
+			case VIEW_LOADING_LOBBY_LIST:
+			load_lobby_list_loop();
+			break;
+
+			case VIEW_LOBBY_LIST:
+			list_lobbies_loop();
+			break;
+
+			case VIEW_COULDNT_LOAD_LOBBY_LIST:
+			message_and_button_loop(STR("Couldn't load lobby list"), STR("MAIN MENU"), VIEW_MAIN_MENU);
+			break;
+
+			case VIEW_JOINING_LOBBY:
+			joining_lobby_loop();
+			break;
+
+			case VIEW_COULDNT_JOIN_LOBBY:
+			message_and_button_loop(STR("Couldn't join lobby"), STR("Main Menu"), VIEW_MAIN_MENU);
+			break;
         }
+
+		{
+			string text = tprint("FPS %2.2f", 1/last_frame_time);
+			draw_horizontally_centered_text(text, 24, 0);
+		}
 
         os_update();
 		gfx_update();
 
         float64 elapsed = os_get_current_time_in_seconds() - frame_start_time;
         animate_rect_to_target(&menu_box, target_menu_box, elapsed, 40);
+
+		last_frame_time = elapsed;
     }
 
     net_free();

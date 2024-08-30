@@ -29,6 +29,35 @@ bool        steam_send(SteamHandle conn, void *buf, int len);
 void*       steam_recv(SteamHandle conn, int *len);
 void        steam_consume(SteamHandle conn);
 
+void        steam_create_lobby_start(int num_players);
+int         steam_create_lobby_result(void);
+void        steam_invite_to_lobby(void);
+void        steam_list_lobbies_owned_by_friends(void);
+int         steam_lobby_list_count(void);
+int         steam_lobby_list_status(void);
+uint64_t    steam_get_lobby(int index);
+uint64_t    steam_current_lobby_owner(void);
+int         steam_get_friend_name(uint64_t friend_id, char *dest, int max);
+const char *steam_get_lobby_title(uint64_t lobby_id);
+void        steam_join_lobby_start(uint64_t lobby_id);
+int         steam_join_lobby_status(void);
+
+uint64_t steam_get_current_time_us(void);
+
+typedef struct { char mem[512]; } SteamPingLocation;
+#define STEAM_PING_LOCATION_STRING_SIZE 1024
+
+#ifdef __cplusplus
+#define EXTERNC extern "C"
+#else
+#define EXTERNC
+#endif
+
+EXTERNC __cdecl bool     steam_get_local_ping_location(SteamPingLocation *location);
+EXTERNC __cdecl void     steam_ping_location_to_string(SteamPingLocation *location, char *dst, size_t max);
+EXTERNC __cdecl void     steam_parse_ping_location(char *str, SteamPingLocation *location);
+EXTERNC __cdecl uint64_t steam_estimate_ping_us(SteamPingLocation *remote_location);
+
 #ifdef __cplusplus
 }
 #endif

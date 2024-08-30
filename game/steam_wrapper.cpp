@@ -62,6 +62,36 @@ static void os_writes(os_handle handle, const char *str)
 	os_write(handle, str, strlen(str));
 }
 
+static void os_writex(os_handle handle, void *str, size_t num)
+{
+	char out[1<<10];
+	size_t nout = 0;
+
+	uint8_t *ptr = (uint8_t*) str;
+	for (size_t i = 0; i < num; i++) {
+		uint8_t hi = ptr[i] >> 4;
+		uint8_t lo = ptr[0] & 0xF;
+		static const char table[] = "0123456789ABCDEF";
+
+		if (sizeof(out) - nout < 3) {
+			os_write(handle, out, nout);
+			nout = 0;
+		}
+		out[nout+0] = table[hi];
+		out[nout+1] = table[lo];
+		out[nout+2] = ' ';
+		nout += 3;
+	}
+	if (nout > 0)
+		os_write(handle, out, nout);
+}
+
+void debug_func(ESteamNetworkingSocketsDebugOutputType nType, const char *pszMsg)
+{
+	os_writes(OS_STDOUT, pszMsg);
+	os_write(OS_STDOUT, "\n", 1);
+}
+
 extern "C" bool steam_init(uint64_t app_id)
 {
 	if (SteamAPI_RestartAppIfNecessary(app_id)) {
@@ -76,6 +106,7 @@ extern "C" bool steam_init(uint64_t app_id)
 
 	os_writes(OS_STDOUT, "Steam initialized\n");
 	SteamNetworkingUtils()->InitRelayNetworkAccess();
+	//SteamNetworkingUtils()->SetDebugOutputFunction(k_ESteamNetworkingSocketsDebugOutputType_Msg, debug_func);
 	return true;
 }
 
@@ -90,10 +121,19 @@ extern "C" void steam_reset(void)
 	steam_connect_stop();
 }
 
+static bool steam_networking_initialized(void)
+{
+	SteamRelayNetworkStatus_t buffer;
+	ESteamNetworkingAvailability code = SteamNetworkingUtils()->GetRelayNetworkStatus(&buffer);
+	return code == k_ESteamNetworkingAvailability_Current;
+}
+
 extern "C" void steam_update(void)
 {
 	SteamAPI_RunCallbacks();
-	SteamNetworkingSockets()->RunCallbacks();
+
+	if (steam_networking_initialized())
+		SteamNetworkingSockets()->RunCallbacks();
 }
 
 typedef enum {
@@ -101,7 +141,6 @@ typedef enum {
 	API_MODE_CLIENT,
 	API_MODE_SERVER,
 } APIMode;
-
 
 APIMode api_mode = API_MODE_NONE;
 
@@ -118,7 +157,7 @@ static bool connect_success  = false;
 static HSteamNetConnection disconnected[MAX_DISCONNECTED];
 static int num_disconnected = 0;
 
-void mark_disconnected(HSteamNetConnection handle)
+static void mark_disconnected(HSteamNetConnection handle)
 {
 	// Make sure handles aren't marked twice
 	int i = 0;
@@ -135,7 +174,7 @@ void mark_disconnected(HSteamNetConnection handle)
 	disconnected[num_disconnected] = handle;
 }
 
-SteamHandle steam_get_disconnect_message(void)
+extern "C" SteamHandle steam_get_disconnect_message(void)
 {
 	if (num_disconnected == 0)
 		return STEAM_HANDLE_INVALID;
@@ -283,22 +322,7 @@ extern "C" bool steam_connect_start(uint64_t peer_id)
     SteamNetworkingIdentity identity;
 	memset(&identity, 0, sizeof(SteamNetworkingIdentity));
 	identity.m_eType = k_ESteamNetworkingIdentityType_SteamID;
-
-	bool found = false;
-	int friend_count = SteamFriends()->GetFriendCount(k_EFriendFlagImmediate);
-	for(int i = 0; i < friend_count; i++) {
-		CSteamID friend_id = SteamFriends()->GetFriendByIndex(i, k_EFriendFlagImmediate);
-		if(friend_id.ConvertToUint64() == peer_id) {
-			identity.SetSteamID(friend_id);
-			found = true;
-			break;
-		}
-	}
-
-	if (!found) {
-		os_writes(OS_STDOUT, "Unable locate friend\n");
-		return false;
-	}
+	identity.SetSteamID(peer_id);
 
 	SteamNetworkingConfigValue_t opt;
 	opt.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)SteamNetConnectionStatusChangedCallback);
@@ -376,4 +400,177 @@ extern "C" void steam_consume(uint32_t conn)
 	int num_messages = SteamNetworkingSockets()->ReceiveMessagesOnConnection(conn, &message, 1);
 	if (num_messages > 0)
 		message->Release();
+}
+
+// 0=not created, 1=created, -1=failed
+int create_lobby_status = 0;
+uint64_t lobby_id;
+bool own_lobby;
+
+class LobbyManager {
+public:
+
+    void CreateLobby(int num_players) {
+		SteamAPICall_t steamCall = SteamMatchmaking()->CreateLobby(k_ELobbyTypeInvisible, num_players);
+		m_LobbyCreatedCallResult.Set(steamCall, this, &LobbyManager::OnLobbyCreated);
+    }
+
+private:
+    // Lobby creation result callback handler
+    CCallResult<LobbyManager, LobbyCreated_t> m_LobbyCreatedCallResult;
+
+    // This function will be called when the lobby creation result is received
+    void OnLobbyCreated(LobbyCreated_t *pCallback, bool bIOFailure) {
+        
+		if (bIOFailure || pCallback->m_eResult != k_EResultOK) {
+			os_writes(OS_STDOUT, "Couldn't create lobby\n");
+            // There was an error creating the lobby
+            create_lobby_status = -1;
+            return;
+        }
+
+		os_writes(OS_STDOUT, "Lobby created\n");
+
+        // Lobby created successfully, print lobby ID
+		own_lobby = true;
+        lobby_id = pCallback->m_ulSteamIDLobby;
+		create_lobby_status = 1;
+
+		SteamMatchmaking()->SetLobbyData(lobby_id, "snakebattleroyale", "yes");
+		SteamMatchmaking()->SetLobbyData(lobby_id, "title", SteamFriends()->GetPersonaName());
+    }
+};
+LobbyManager lobby_manager;
+
+extern "C" void steam_create_lobby_start(int num_players)
+{
+	lobby_manager.CreateLobby(num_players);
+}
+
+extern "C" int steam_create_lobby_result(void)
+{
+	if (create_lobby_status == 0)
+		return 0;
+	int status = create_lobby_status;
+	create_lobby_status = 0;
+	return status;
+}
+
+extern "C" void steam_invite_to_lobby(void)
+{
+	SteamFriends()->ActivateGameOverlayInviteDialog(lobby_id);
+}
+
+//int lobby_list_status = 0;
+int lobby_list_count = -1;
+SteamAPICall_t lobby_list_api_call;
+
+void steam_list_lobbies_owned_by_friends(void)
+{
+	SteamMatchmaking()->AddRequestLobbyListStringFilter("snakebattleroyale", "yes", k_ELobbyComparisonEqual);
+	lobby_list_api_call = SteamMatchmaking()->RequestLobbyList();
+}
+
+int steam_lobby_list_count(void)
+{
+	return lobby_list_count;
+}
+
+int steam_lobby_list_status(void)
+{
+	LobbyMatchList_t buffer;
+	bool failed;
+	if (!SteamUtils()->GetAPICallResult(lobby_list_api_call, &buffer, sizeof(buffer), LobbyMatchList_t::k_iCallback, &failed))
+		return false;
+	lobby_list_count = buffer.m_nLobbiesMatching;
+	return failed ? -1 : 1;
+}
+
+extern "C" uint64_t steam_get_lobby(int index)
+{
+	return SteamMatchmaking()->GetLobbyByIndex(index).ConvertToUint64();
+}
+
+extern "C" uint64_t steam_current_lobby_owner()
+{
+	return SteamMatchmaking()->GetLobbyOwner(lobby_id).ConvertToUint64();
+}
+
+extern "C" const char *steam_get_lobby_title(uint64_t lobby_id)
+{
+	return SteamMatchmaking()->GetLobbyData(lobby_id, "title");
+}
+
+extern "C" int steam_get_friend_name(uint64_t friend_id, char *dest, int max)
+{
+	const char *name = SteamFriends()->GetFriendPersonaName(friend_id);
+	return snprintf(dest, max, "%s", name);
+}
+
+SteamAPICall_t join_lobby_api_call;
+
+extern "C" void steam_join_lobby_start(uint64_t lobby_id)
+{
+	join_lobby_api_call = SteamMatchmaking()->JoinLobby(lobby_id);
+}
+
+extern "C" int steam_join_lobby_status(void)
+{
+	LobbyEnter_t buffer;
+	bool failed;
+	if (!SteamUtils()->GetAPICallResult(join_lobby_api_call, &buffer, sizeof(buffer), LobbyEnter_t::k_iCallback, &failed))
+		return false;
+	
+	own_lobby = false;
+	lobby_id = buffer.m_ulSteamIDLobby;
+	return failed ? -1 : 1;
+}
+
+extern "C" uint64_t steam_get_current_time_us(void)
+{
+	return SteamNetworkingUtils()->GetLocalTimestamp();
+}
+
+static_assert(STEAM_PING_LOCATION_STRING_SIZE == k_cchMaxSteamNetworkingPingLocationString, "");
+static_assert(sizeof(SteamPingLocation) == sizeof(SteamNetworkPingLocation_t), "");
+static_assert(alignof(SteamPingLocation) == alignof(SteamNetworkPingLocation_t), "");
+
+extern "C" __cdecl bool steam_get_local_ping_location(SteamPingLocation *location)
+{
+	float ret = SteamNetworkingUtils()->GetLocalPingLocation(*(SteamNetworkPingLocation_t*) location);
+	if (ret < 0) {
+		os_writes(OS_STDOUT, "Ping location information not available\n");
+		return false;
+	}
+	return true;
+}
+
+extern "C" __cdecl void steam_ping_location_to_string(SteamPingLocation *location, char *dst, size_t max)
+{
+	if (max < k_cchMaxSteamNetworkingPingLocationString) {
+		os_writes(OS_STDOUT, "Buffer too small\n");
+		abort();
+	}
+	SteamNetworkingUtils()->ConvertPingLocationToString(*(SteamNetworkPingLocation_t*) location, dst, max);
+	os_writes(OS_STDOUT, "Generated ping location string: ");
+	os_writes(OS_STDOUT, dst);
+	os_writes(OS_STDOUT, "\n");
+}
+
+extern "C" __cdecl void steam_parse_ping_location(char *str, SteamPingLocation *location)
+{
+	if (!SteamNetworkingUtils()->ParsePingLocationString(str, *(SteamNetworkPingLocation_t*) location)) {
+		os_writes(OS_STDOUT, "Couldn't parse ping location\n");
+		abort();
+	}
+}
+
+extern "C" __cdecl uint64_t steam_estimate_ping_us(SteamPingLocation *remote_location)
+{
+	int result = SteamNetworkingUtils()->EstimatePingTimeFromLocalHost(*(SteamNetworkPingLocation_t*) remote_location);
+	if (result < 0) {
+		os_writes(OS_STDOUT, "Ping time is negative\n");
+		abort();
+	}
+	return result * 1000;
 }

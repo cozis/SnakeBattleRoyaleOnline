@@ -21,8 +21,10 @@ void init_client_data(ClientData *client)
 
 void reset_client_data(ClientData *client)
 {
-	if (client->handle != STEAM_HANDLE_INVALID)
+	if (client->handle != STEAM_HANDLE_INVALID) {
+		printf("CLIENT RESET\n");
 		steam_close_accepted_connection(client->handle);
+	}
 
 	client->handle = STEAM_HANDLE_INVALID;
 	client->failed = false;
@@ -46,6 +48,7 @@ void net_free(void)
 
 void net_reset(void)
 {
+	printf("NET RESET\n");
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		reset_client_data(&client_data[i]);
 	reset_client_data(&server_data);
@@ -62,11 +65,9 @@ void client_update(ClientData *client)
 			char *src = byte_queue_start_read(&client->output);
 			int   len = byte_queue_used_space(&client->output);
 			if (len > 0) {
-				printf("Sending %d bytes\n", len);
-				if (!steam_send(client->handle, src, len)) {
-					printf("steam_send failed\n");
+				if (!steam_send(client->handle, src, len))
 					client->failed = true;
-				} else
+				else
 					byte_queue_end_read(&client->output, len);
 			}
 		}
@@ -77,7 +78,6 @@ void client_update(ClientData *client)
 			char *src = steam_recv(client->handle, &len);
 
 			if (len > 0) {
-				printf("Buffering %d bytes\n", len);
 				if (!byte_queue_ensure_min_free_space(&client->input, len))
 					client->failed = true;
 				else {
@@ -98,6 +98,7 @@ void net_update(void)
 	while ((handle = steam_get_disconnect_message()) != STEAM_HANDLE_INVALID) {
 		for (int i = 0; i < MAX_CLIENTS; i++) {
 			if (client_data[i].handle == handle) {
+				printf("Snake disconnected\n");
 				client_data[i].failed = true;
 				break;
 			}
@@ -152,7 +153,6 @@ void net_write(uint32_t conn, void *msg, int len)
 	char *dst = byte_queue_start_write(&client->output);
 	memcpy(dst, msg, len);
 	byte_queue_end_write(&client->output, len);
-	printf("WROTE %d BYTES\n", len);
 }
 
 string net_peekmsg(uint32_t conn)
@@ -205,6 +205,11 @@ int net_connect_status(void)
 	return steam_connect_status();
 }
 
+typedef enum {
+	MESSAGE_INPUT,
+	MESSAGE_SYNC,
+} MessageType;
+
 typedef struct {
     u64 time;
     u32 player;
@@ -222,6 +227,7 @@ typedef struct { // TODO: Make sure there is no padding
     u64 seed;
     u32 num_snakes;
     u32 self_index;
+	char location[STEAM_PING_LOCATION_STRING_SIZE];
     InitialSnakeStateMessage snakes[MAX_SNAKES];
 } InitialGameStateMessage;
 
@@ -246,14 +252,17 @@ void broadcast_input_to_clients(Input input)
     input.dir    = htonl(input.dir);
     input.player = htonl(input.player);
 
+	uint8_t type = MESSAGE_INPUT;
     for (u32 i = 0; i < MAX_CLIENTS; i++) {
         if (client_data[i].handle != STEAM_HANDLE_INVALID) {
+			net_write(client_data[i].handle, &type,         sizeof(type));
             net_write(client_data[i].handle, &input.time,   sizeof(input.time));
             net_write(client_data[i].handle, &input.player, sizeof(input.player));
             net_write(client_data[i].handle, &input.dir,    sizeof(input.dir));
         }
     }
 }
+
 
 int count_client_handles(void)
 {
@@ -305,10 +314,14 @@ void send_local_input(Input input)
         //       the argument is a copy!!!
         input.time = htonll(input.time);
         input.dir  = htonl(input.dir);
+
         net_write(STEAM_HANDLE_SERVER, &input.time, sizeof(input.time));
         net_write(STEAM_HANDLE_SERVER, &input.dir,  sizeof(input.dir));
     }
 }
+
+u32 get_current_player_id(void);
+u64 get_current_frame_index(void);
 
 bool get_client_input_from_network(Input *input)
 {
@@ -323,13 +336,18 @@ bool get_client_input_from_network(Input *input)
 
 		u32 player_id = cursor+1;
 
+		if (net_failed(client_data[cursor].handle)) {
+			printf("CLIENT ERROR\n");
+			*input = (Input) {.time=get_current_frame_index(), .player=player_id, .dir=DIR_LEFT, .disconnect=true};
+			reset_client_data(&client_data[cursor]);
+			return true;
+		}
+
 		string msg = net_peekmsg(client_data[cursor].handle);
         if (msg.count < sizeof(u64) + sizeof(u32)) {
 			cursor++;
             continue;
 		}
-
-		printf("Input available (msg={%p, %d})\n", msg.data, msg.count);
 
         u32 value;
         u64 time;
@@ -352,21 +370,62 @@ bool get_client_input_from_network(Input *input)
 	return false;
 }
 
-bool get_server_input_from_network(Input *input)
-{
-	// TODO: Handle server disconnect
+typedef struct {
+	bool empty;
+	u64 frame_index;
+	u64 time;
+} SyncMessage;
 
-    string msg = net_peekmsg(STEAM_HANDLE_SERVER);
-	if (msg.count < 2 * sizeof(u32) + sizeof(u64))
+bool get_server_input_from_network(Input *input, SyncMessage *msg)
+{
+	string input_buffer;
+	for (;;) {
+
+		if (net_failed(STEAM_HANDLE_SERVER)) {
+			printf("SERVER ERROR\n");
+			*input = (Input) {.time=get_current_frame_index(), .player=0, .dir=DIR_LEFT, .disconnect=true};
+			reset_client_data(&server_data);
+			return true;
+		}
+
+		input_buffer = net_peekmsg(STEAM_HANDLE_SERVER);
+
+		if (input_buffer.count < sizeof(u8) + 2 * sizeof(u64))
+			break;
+
+		u8 type;
+		memcpy(&type, input_buffer.data + 0, sizeof(u8));
+		if (type != MESSAGE_SYNC) break;
+
+		u64 frame_index;
+		u64 time;
+		memcpy(&frame_index,  input_buffer.data + 1, sizeof(u64));
+		memcpy(&time,         input_buffer.data + 9, sizeof(u64));
+
+		msg->empty = false;
+		msg->frame_index = ntohll(frame_index);
+		msg->time = ntohll(time);
+
+		net_popmsg(STEAM_HANDLE_SERVER, sizeof(u8) + 2 * sizeof(u32) + sizeof(u64));
+	}
+
+	if (input_buffer.count < 2 * sizeof(u32) + sizeof(u64))
 		return false;
+
+	u8 type;
+	memcpy(&type, input_buffer.data + 0, sizeof(u8));
+	if (type != MESSAGE_INPUT) {
+		printf("Bad message type from server (type %d)\n", type);
+		abort();
+	}
 
 	u64 time;
 	u32 buffer0;
 	u32 buffer1;
-	memcpy(&time,    msg.data + 0, sizeof(u64));
-	memcpy(&buffer0, msg.data + 8, sizeof(u32));
-	memcpy(&buffer1, msg.data + 12, sizeof(u32));
-	net_popmsg(STEAM_HANDLE_SERVER, 2 * sizeof(u32) + sizeof(u64));
+	memcpy(&time,    input_buffer.data + 1, sizeof(u64));
+	memcpy(&buffer0, input_buffer.data + 9, sizeof(u32));
+	memcpy(&buffer1, input_buffer.data + 13, sizeof(u32));
+	net_popmsg(STEAM_HANDLE_SERVER, sizeof(u8) + 2 * sizeof(u32) + sizeof(u64));
 
 	time = ntohll(time);
 	u32 id = ntohl(buffer0);
@@ -381,10 +440,7 @@ bool get_server_input_from_network(Input *input)
 	return true;
 }
 
-u32 get_current_player_id(void);
-u64 get_current_frame_index(void);
-
-bool get_input(Input *input)
+bool get_local_input(Input *input)
 {
     if (up_press) {
         input->dir = DIR_UP;
@@ -424,13 +480,6 @@ bool get_input(Input *input)
         right_press = false;
         if (multiplayer) send_local_input(*input);
         return true;
-    }
-
-    if (multiplayer) {
-        if (is_server)
-            return get_client_input_from_network(input);
-        else
-            return get_server_input_from_network(input);
     }
 
     return false;
@@ -481,7 +530,7 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 
 	string input_buffer = net_peekmsg(STEAM_HANDLE_SERVER);
 
-	if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32))
+	if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32) + STEAM_PING_LOCATION_STRING_SIZE)
 		return 0;
 
 	memcpy(initial, input_buffer.data, 2 * sizeof(u64) +  2 * sizeof(u32));
@@ -490,7 +539,7 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 	initial->num_snakes = ntohl(initial->num_snakes);
 	initial->self_index = ntohl(initial->self_index);
 
-	if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage))
+	if (input_buffer.count < 2 * sizeof(u64) + 2 * sizeof(u32) + STEAM_PING_LOCATION_STRING_SIZE + initial->num_snakes * sizeof(InitialSnakeStateMessage))
 		return 0;
 
 	memcpy(initial, input_buffer.data, sizeof(InitialGameStateMessage));
@@ -504,6 +553,6 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 		initial->snakes[i].head_y = ntohl(initial->snakes[i].head_y);
 	}
 
-	net_popmsg(STEAM_HANDLE_SERVER, 2 * sizeof(u64) + 2 * sizeof(u32) + initial->num_snakes * sizeof(InitialSnakeStateMessage));
+	net_popmsg(STEAM_HANDLE_SERVER, 2 * sizeof(u64) + 2 * sizeof(u32) + STEAM_PING_LOCATION_STRING_SIZE + initial->num_snakes * sizeof(InitialSnakeStateMessage));
 	return 1;
 }

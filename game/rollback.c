@@ -109,7 +109,7 @@ void apply_inputs_to_game_instance_until_time(GameState *game, uint64_t frame_in
 
 void recalculate_latest_state(void)
 {
-    u64 lookback = 8;
+    u64 lookback = 32;
     u64 latest_frame_index = latest_game_state.frame_index;
 
     // Apply old inputs permanently
@@ -134,15 +134,197 @@ void apply_input_to_game(Input input)
         apply_input_to_game_instance(&latest_game_state, input);
 }
 
-float last_update_time = -1;
+u64 game_start_time;
 
-void update_game(void)
+void send_initial_state(void)
+{
+	game_start_time = steam_get_current_time_us();
+
+	init_game_state(&latest_game_state);
+	int num_players = 1 + count_client_handles();
+	for (int i = 0; i < num_players; i++)
+		spawn_snake(&latest_game_state);
+	memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
+
+	self_snake_index = 0;
+
+	char current_location_string[STEAM_PING_LOCATION_STRING_SIZE];
+	{
+		memset(current_location_string, 0, STEAM_PING_LOCATION_STRING_SIZE);
+
+		SteamPingLocation location;
+		steam_get_local_ping_location(&location);
+		steam_ping_location_to_string(&location, current_location_string, sizeof(current_location_string));
+	}
+
+	// Send player positions to clients
+	for (int i = 0, j = 0; i < MAX_CLIENTS; i++) {
+
+		if (client_data[i].handle == STEAM_HANDLE_INVALID) {
+			continue;
+		} else {
+			j++;
+		}
+
+		u64 time = htonll(game_start_time);
+		net_write(client_data[i].handle, &time, sizeof(time));
+
+		u64 seed = htonll(latest_game_state.seed);
+		net_write(client_data[i].handle, &seed, sizeof(seed));
+
+		// Send the player count
+		u32 buffer = htonl(num_players);
+		net_write(client_data[i].handle, &buffer, sizeof(buffer));
+
+		// Send the index associated to this client
+		buffer = htonl(j); // <-- This is j and not i
+		net_write(client_data[i].handle, &buffer, sizeof(buffer));
+
+		net_write(client_data[i].handle, current_location_string, STEAM_PING_LOCATION_STRING_SIZE);
+
+		// Send the player information
+		for (int k = 0; k < MAX_SNAKES; k++) {
+			Snake *s = &latest_game_state.snakes[k];
+			if (!s->used) continue;
+
+			buffer = htonl(s->head_x);
+			net_write(client_data[i].handle, &buffer, sizeof(buffer));
+
+			buffer = htonl(s->head_y);
+			net_write(client_data[i].handle, &buffer, sizeof(buffer));
+
+			assert(s->body_len == 0); // We are assuming the starting size is 0. If that
+										// wasn't the case we would need to send the body
+		}
+
+		j++;
+	}
+}
+
+u64 ping_time_us;
+
+void start_client_game(InitialGameStateMessage *initial)
+{
+	game_start_time = steam_get_current_time_us();
+
+	init_game_state(&latest_game_state);
+	for (int i = 0; i < initial->num_snakes; i++)
+		init_snake(&latest_game_state.snakes[i],
+				initial->snakes[i].head_x,
+				initial->snakes[i].head_y);
+	latest_game_state.seed = initial->seed;
+	memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
+
+	{
+		SteamPingLocation remote_location;
+		steam_parse_ping_location(initial->location, &remote_location);
+		ping_time_us = steam_estimate_ping_us(&remote_location);
+		printf("ping time = %f ms\n", (float) ping_time_us / 1000);
+	}
+
+	u32 latency_frames = (float) ping_time_us * FPS / 1000000;
+	latest_game_state.frame_index = latency_frames;
+	printf("latency_frames=%d\n", latency_frames);
+
+	self_snake_index = (int) initial->self_index;
+}
+
+float last_update_time = -1;
+float last_sync_time = -1;
+
+void sync_frame_index(uint64_t frame_index)
+{
+	uint64_t time = steam_get_current_time_us() - game_start_time;
+
+	//printf("Sending sync time=%llu, frame=%llu\n", time, frame_index);
+
+	time = htonll(time);
+	frame_index = htonll(frame_index);
+
+	uint8_t type = MESSAGE_SYNC;
+    for (u32 i = 0; i < MAX_CLIENTS; i++) {
+        if (client_data[i].handle != STEAM_HANDLE_INVALID) {
+			net_write(client_data[i].handle, &type,        sizeof(type));
+            net_write(client_data[i].handle, &frame_index, sizeof(frame_index));
+			net_write(client_data[i].handle, &time,        sizeof(time));
+        }
+    }
+}
+
+u64   last_target_frame_index = -1;
+float last_target_update_time = -1;
+
+u64 get_target_frame_index(void)
+{
+	if (last_target_frame_index == -1)
+		return get_current_frame_index();
+	float current_time = os_get_current_time_in_seconds();
+	return last_target_frame_index + (current_time - last_target_update_time) * FPS;
+}
+
+void update_game(SyncMessage sync)
 {
     float current_time = os_get_current_time_in_seconds();
-    int num_steps = last_update_time < 0 ? 1 : (current_time - last_update_time) * FPS;
+	u64   current_frame_index = get_current_frame_index();
 
-    if (multiplayer)
-        recalculate_latest_state();
+	if (current_frame_index == 0) {
+		last_target_frame_index = -1;
+		last_target_update_time = -1;
+		last_update_time = -1;
+		last_sync_time = -1;
+	}
+
+    if (multiplayer) {
+
+		if (is_server) {
+
+			if (last_sync_time < 0 || current_time - last_sync_time > 3) {
+				sync_frame_index(current_frame_index);
+				last_sync_time = current_time;
+			}
+
+		} else {
+
+			if (!sync.empty) {
+
+				uint64_t latency_us = ping_time_us / 2;
+				uint64_t latency_frame = latency_us * FPS / 1000000;
+				//printf("latency = %llu us = %llu frames\n", latency_us, latency_frame);
+				sync.frame_index += latency_frame;
+
+				last_target_frame_index = sync.frame_index;
+				last_target_update_time = current_time;
+			}
+		}
+
+		recalculate_latest_state();
+	}
+
+	u64 target_frame_index = get_target_frame_index();
+
+	//printf("%s: frame = %llu -> target = %llu\n", STR(is_server ? "SERVER" : "CLIENT"), current_frame_index, target_frame_index);
+
+	int num_steps;
+	if (last_update_time < 0)
+		num_steps = 1;
+	else {
+
+		float fps;
+
+		if (is_server)
+			fps = FPS;
+		else {
+			s64 delta = (u64) target_frame_index - (s64) current_frame_index;
+
+			if (delta <= FPS)
+				fps = FPS + delta;
+			else
+				fps = 0;
+
+			//printf("frame %llu -> %llu\n", current_frame_index, target_frame_index);
+		}
+		num_steps = (current_time - last_update_time) * fps;
+	}
 
     if (num_steps > 0) {
         for (int i = 0; i < num_steps; i++)

@@ -403,6 +403,7 @@ void oogabooga_init(u64 program_memory_size) {
 }
 #endif
 
+void prelude(void);
 int ENTRY_PROC(int argc, char **argv);
 
 #if !OOGABOOGA_LINK_EXTERNAL_INSTANCE
@@ -413,6 +414,7 @@ int SHARED_EXPORT main(int argc, char **argv) {
 int main(int argc, char **argv) {
 #endif
 
+	prelude();
 
 	print("Ooga booga program started\n");
 	oogabooga_init(INITIAL_PROGRAM_MEMORY_SIZE); 
