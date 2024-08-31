@@ -124,6 +124,7 @@ void recalculate_latest_state(void)
 void apply_input_to_game(Input input)
 {
     if (multiplayer) {
+		input.time += INPUT_FRAME_DELAY_COUNT;
         if (input.time < oldest_game_state.frame_index) {
             printf("Input is too old\n");
             abort();
@@ -219,18 +220,18 @@ void start_client_game(InitialGameStateMessage *initial)
 		SteamPingLocation remote_location;
 		steam_parse_ping_location(initial->location, &remote_location);
 		ping_time_us = steam_estimate_ping_us(&remote_location);
-		printf("ping time = %f ms\n", (float) ping_time_us / 1000);
+		printf("ping time = %f ms\n", (double) ping_time_us / 1000);
 	}
 
-	u32 latency_frames = (float) ping_time_us * FPS / 1000000;
+	u32 latency_frames = (double) ping_time_us * FPS / 1000000;
 	latest_game_state.frame_index = latency_frames;
 	printf("latency_frames=%d\n", latency_frames);
 
 	self_snake_index = (int) initial->self_index;
 }
 
-float last_update_time = -1;
-float last_sync_time = -1;
+double last_update_time = -1;
+double last_sync_time = -1;
 
 void sync_frame_index(uint64_t frame_index)
 {
@@ -251,20 +252,22 @@ void sync_frame_index(uint64_t frame_index)
     }
 }
 
+#define CONVERGE_INSTANTLY 1
+
 u64   last_target_frame_index = -1;
-float last_target_update_time = -1;
+double last_target_update_time = -1;
 
 u64 get_target_frame_index(void)
 {
 	if (last_target_frame_index == -1)
 		return get_current_frame_index();
-	float current_time = os_get_current_time_in_seconds();
+	double current_time = os_get_current_time_in_seconds();
 	return last_target_frame_index + (current_time - last_target_update_time) * FPS;
 }
 
 void update_game(SyncMessage sync)
 {
-    float current_time = os_get_current_time_in_seconds();
+    double current_time = os_get_current_time_in_seconds();
 	u64   current_frame_index = get_current_frame_index();
 
 	if (current_frame_index == 0) {
@@ -278,7 +281,7 @@ void update_game(SyncMessage sync)
 
 		if (is_server) {
 
-			if (last_sync_time < 0 || current_time - last_sync_time > 3) {
+			if (last_sync_time < 0 || current_time - last_sync_time > 1) {
 				sync_frame_index(current_frame_index);
 				last_sync_time = current_time;
 			}
@@ -286,14 +289,11 @@ void update_game(SyncMessage sync)
 		} else {
 
 			if (!sync.empty) {
-
-				uint64_t latency_us = ping_time_us / 2;
-				uint64_t latency_frame = latency_us * FPS / 1000000;
-				//printf("latency = %llu us = %llu frames\n", latency_us, latency_frame);
-				sync.frame_index += latency_frame;
-
+#if CONVERGE_INSTANTLY
+				latest_game_state.frame_index = sync.frame_index;
+#endif
 				last_target_frame_index = sync.frame_index;
-				last_target_update_time = current_time;
+				last_target_update_time = current_time + (double) ping_time_us / 1000000;
 			}
 		}
 
@@ -309,21 +309,32 @@ void update_game(SyncMessage sync)
 		num_steps = 1;
 	else {
 
-		float fps;
-
+#if CONVERGE_INSTANTLY
+		if (is_server)
+			num_steps = (current_time - last_update_time) * FPS;
+		else {
+			if (target_frame_index+1 > current_frame_index)
+				num_steps = target_frame_index+1 - current_frame_index;
+			else
+				num_steps = 0;
+		}
+#else
 		if (is_server)
 			fps = FPS;
 		else {
-			s64 delta = (u64) target_frame_index - (s64) current_frame_index;
 
-			if (delta <= FPS)
-				fps = FPS + delta;
-			else
+			s64 delta = (s64) target_frame_index - (s64) current_frame_index;
+
+			if (FPS < -delta * 5)
 				fps = 0;
+			else
+				fps = FPS + delta * 5;
 
-			//printf("frame %llu -> %llu\n", current_frame_index, target_frame_index);
+			//printf("frame %llu -> %llu (delta %lld)\n", current_frame_index, target_frame_index, (s64) target_frame_index - (s64) current_frame_index);
 		}
+
 		num_steps = (current_time - last_update_time) * fps;
+#endif
 	}
 
     if (num_steps > 0) {
