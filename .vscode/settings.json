@@ -1,14 +1,8 @@
 {
-"C_Cpp.errorSquiggles": "disabled",
-"files.exclude": {
-    "": true,
-    "**/.git": false
-},
-"files.associations": {
-    "*.h": "cpp",
-    "initializer_list": "c",
-    "utility": "c",
-    "xutility": "c",
-    "algorithm": "c"
-}
+	"files.associations": {
+		"*.h": "cpp",
+		"string": "c",
+		"compare": "c",
+		"cstdint": "c"
+	}
 }

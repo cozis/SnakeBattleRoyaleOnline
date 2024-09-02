@@ -1,4 +1,4 @@
-
+steam_appid.txt
 *.raddbgi
 **/worlds
 data
@@ -19,6 +19,8 @@ sdk*
 *.VC.db
 *.obj
 *.ilk
+*.lib
+*.dll
 *.spall
 release/
 output.txt
