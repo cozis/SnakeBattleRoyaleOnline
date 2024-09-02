@@ -4,5 +4,11 @@
 - Show game points in single and multi player
 - Fix compilation warnings
 - Fix text rendering
+- Add UI element to exit a game
+- vsync?
+- Show score
+- History of game results
+- wasd
+- Cap FPS?
 
 # DONE

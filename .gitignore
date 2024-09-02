@@ -5,6 +5,7 @@ data
 uid
 sdk*
 *.rdbg
+*.zip
 *.exe
 *.pdb
 .build/
@@ -60,3 +61,6 @@ test_doc.vkn
 google_trace.json
 
 build/*
+
+snake
+snake_no_multiplayer

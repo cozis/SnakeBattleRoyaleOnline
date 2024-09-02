@@ -411,7 +411,8 @@ class LobbyManager {
 public:
 
     void CreateLobby(int num_players) {
-		SteamAPICall_t steamCall = SteamMatchmaking()->CreateLobby(k_ELobbyTypeInvisible, num_players);
+		ISteamMatchmaking *ptr = SteamMatchmaking();
+		SteamAPICall_t steamCall = ptr->CreateLobby(k_ELobbyTypeInvisible, num_players);
 		m_LobbyCreatedCallResult.Set(steamCall, this, &LobbyManager::OnLobbyCreated);
     }
 
@@ -467,8 +468,9 @@ SteamAPICall_t lobby_list_api_call;
 
 void steam_list_lobbies_owned_by_friends(void)
 {
-	SteamMatchmaking()->AddRequestLobbyListStringFilter("snakebattleroyale", "yes", k_ELobbyComparisonEqual);
-	lobby_list_api_call = SteamMatchmaking()->RequestLobbyList();
+	ISteamMatchmaking *ptr = SteamMatchmaking();
+	ptr->AddRequestLobbyListStringFilter("snakebattleroyale", "yes", k_ELobbyComparisonEqual);
+	lobby_list_api_call = ptr->RequestLobbyList();
 }
 
 int steam_lobby_list_count(void)
