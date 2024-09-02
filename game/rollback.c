@@ -135,6 +135,10 @@ void apply_input_to_game(Input input)
         apply_input_to_game_instance(&latest_game_state, input);
 }
 
+double last_update_time = -1;
+double last_sync_time = -1;
+
+#if HAVE_MULTIPLAYER
 u64 game_start_time;
 
 void send_initial_state(void)
@@ -230,9 +234,6 @@ void start_client_game(InitialGameStateMessage *initial)
 	self_snake_index = (int) initial->self_index;
 }
 
-double last_update_time = -1;
-double last_sync_time = -1;
-
 void sync_frame_index(uint64_t frame_index)
 {
 	uint64_t time = steam_get_current_time_us() - game_start_time;
@@ -251,6 +252,7 @@ void sync_frame_index(uint64_t frame_index)
         }
     }
 }
+#endif /* HAVE_MULTIPLAYER */
 
 #define CONVERGE_INSTANTLY 1
 
@@ -277,6 +279,7 @@ void update_game(SyncMessage sync)
 		last_sync_time = -1;
 	}
 
+#if HAVE_MULTIPLAYER
     if (multiplayer) {
 
 		if (is_server) {
@@ -299,6 +302,7 @@ void update_game(SyncMessage sync)
 
 		recalculate_latest_state();
 	}
+#endif
 
 	u64 target_frame_index = get_target_frame_index();
 

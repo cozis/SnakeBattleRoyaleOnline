@@ -1,4 +1,44 @@
 
+typedef enum {
+	MESSAGE_INPUT,
+	MESSAGE_SYNC,
+} MessageType;
+
+typedef struct {
+    u64 time;
+    u32 player;
+    Direction dir;
+    bool disconnect;
+} Input;
+
+typedef struct {
+	bool empty;
+	u64 frame_index;
+	u64 time;
+} SyncMessage;
+
+typedef struct { // TODO: Make sure there is no padding
+    u32 head_x;
+    u32 head_y;
+} InitialSnakeStateMessage;
+
+typedef struct { // TODO: Make sure there is no padding
+    u64 time_us;
+    u64 seed;
+    u32 num_snakes;
+    u32 self_index;
+	char location[STEAM_PING_LOCATION_STRING_SIZE];
+    InitialSnakeStateMessage snakes[MAX_SNAKES];
+} InitialGameStateMessage;
+
+bool is_server;
+bool multiplayer;
+
+u32 get_current_player_id(void);
+u64 get_current_frame_index(void);
+
+#if HAVE_MULTIPLAYER
+
 typedef struct {
 	SteamHandle handle;
 	ByteQueue input;
@@ -205,35 +245,6 @@ int net_connect_status(void)
 	return steam_connect_status();
 }
 
-typedef enum {
-	MESSAGE_INPUT,
-	MESSAGE_SYNC,
-} MessageType;
-
-typedef struct {
-    u64 time;
-    u32 player;
-    Direction dir;
-    bool disconnect;
-} Input;
-
-typedef struct { // TODO: Make sure there is no padding
-    u32 head_x;
-    u32 head_y;
-} InitialSnakeStateMessage;
-
-typedef struct { // TODO: Make sure there is no padding
-    u64 time_us;
-    u64 seed;
-    u32 num_snakes;
-    u32 self_index;
-	char location[STEAM_PING_LOCATION_STRING_SIZE];
-    InitialSnakeStateMessage snakes[MAX_SNAKES];
-} InitialGameStateMessage;
-
-bool is_server;
-bool multiplayer;
-
 // Results:
 //   0  No message
 //   1  Message received
@@ -287,22 +298,6 @@ void compact_client_handles(void)
             client_data[j++] = client_data_copy[i];
 }
 
-bool up_press = false;
-bool down_press = false;
-bool left_press = false;
-bool right_press = false;
-
-void poll_for_inputs(void)
-{
-    up_press    = is_key_just_pressed(KEY_ARROW_UP);
-    down_press  = is_key_just_pressed(KEY_ARROW_DOWN);
-    left_press  = is_key_just_pressed(KEY_ARROW_LEFT);
-    right_press = is_key_just_pressed(KEY_ARROW_RIGHT);
-
-    if (multiplayer)
-        net_update();
-}
-
 void send_local_input(Input input)
 {
     assert(!input.disconnect);
@@ -319,9 +314,6 @@ void send_local_input(Input input)
         net_write(STEAM_HANDLE_SERVER, &input.dir,  sizeof(input.dir));
     }
 }
-
-u32 get_current_player_id(void);
-u64 get_current_frame_index(void);
 
 bool get_client_input_from_network(Input *input)
 {
@@ -369,12 +361,6 @@ bool get_client_input_from_network(Input *input)
 	cursor = 0;
 	return false;
 }
-
-typedef struct {
-	bool empty;
-	u64 frame_index;
-	u64 time;
-} SyncMessage;
 
 bool get_server_input_from_network(Input *input, SyncMessage *msg)
 {
@@ -438,51 +424,6 @@ bool get_server_input_from_network(Input *input, SyncMessage *msg)
 	input->player = id;
 	input->time = time;
 	return true;
-}
-
-bool get_local_input(Input *input)
-{
-    if (up_press) {
-        input->dir = DIR_UP;
-        input->disconnect = false;
-        input->player = get_current_player_id();
-        input->time = get_current_frame_index();
-        up_press = false;
-        if (multiplayer) send_local_input(*input);
-        return true;
-    }
-
-    if (down_press) {
-        input->dir = DIR_DOWN;
-        input->disconnect = false;
-        input->player = get_current_player_id();
-        input->time = get_current_frame_index();
-        down_press = false;
-        if (multiplayer) send_local_input(*input);
-        return true;
-    }
-
-    if (left_press) {
-        input->dir = DIR_LEFT;
-        input->disconnect = false;
-        input->player = get_current_player_id();
-        input->time = get_current_frame_index();
-        left_press = false;
-        if (multiplayer) send_local_input(*input);
-        return true;
-    }
-
-    if (right_press) {
-        input->dir = DIR_RIGHT;
-        input->disconnect = false;
-        input->player = get_current_player_id();
-        input->time = get_current_frame_index();
-        right_press = false;
-        if (multiplayer) send_local_input(*input);
-        return true;
-    }
-
-    return false;
 }
 
 // -1 if not waiting for players
@@ -555,4 +496,77 @@ int poll_for_initial_state(InitialGameStateMessage *initial)
 
 	net_popmsg(STEAM_HANDLE_SERVER, 2 * sizeof(u64) + 2 * sizeof(u32) + STEAM_PING_LOCATION_STRING_SIZE + initial->num_snakes * sizeof(InitialSnakeStateMessage));
 	return 1;
+}
+
+#endif /* HAVE_MULTIPLAYER */
+
+bool up_press = false;
+bool down_press = false;
+bool left_press = false;
+bool right_press = false;
+
+void poll_for_inputs(void)
+{
+    up_press    = is_key_just_pressed(KEY_ARROW_UP);
+    down_press  = is_key_just_pressed(KEY_ARROW_DOWN);
+    left_press  = is_key_just_pressed(KEY_ARROW_LEFT);
+    right_press = is_key_just_pressed(KEY_ARROW_RIGHT);
+
+#if HAVE_MULTIPLAYER
+    if (multiplayer)
+        net_update();
+#endif /* HAVE_MULTIPLAYER */
+}
+
+bool get_local_input(Input *input)
+{
+    if (up_press) {
+        input->dir = DIR_UP;
+        input->disconnect = false;
+        input->player = get_current_player_id();
+        input->time = get_current_frame_index();
+        up_press = false;
+#if HAVE_MULTIPLAYER
+        if (multiplayer) send_local_input(*input);
+#endif
+        return true;
+    }
+
+    if (down_press) {
+        input->dir = DIR_DOWN;
+        input->disconnect = false;
+        input->player = get_current_player_id();
+        input->time = get_current_frame_index();
+        down_press = false;
+#if HAVE_MULTIPLAYER
+        if (multiplayer) send_local_input(*input);
+#endif
+        return true;
+    }
+
+    if (left_press) {
+        input->dir = DIR_LEFT;
+        input->disconnect = false;
+        input->player = get_current_player_id();
+        input->time = get_current_frame_index();
+        left_press = false;
+#if HAVE_MULTIPLAYER
+        if (multiplayer) send_local_input(*input);
+#endif
+        return true;
+    }
+
+    if (right_press) {
+        input->dir = DIR_RIGHT;
+        input->disconnect = false;
+        input->player = get_current_player_id();
+        input->time = get_current_frame_index();
+        right_press = false;
+#if HAVE_MULTIPLAYER
+        if (multiplayer) send_local_input(*input);
+#endif
+        return true;
+    }
+
+    return false;
 }

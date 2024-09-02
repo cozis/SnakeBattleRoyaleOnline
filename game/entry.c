@@ -21,6 +21,7 @@ typedef enum {
 	VIEW_COULDNT_LOAD_LOBBY_LIST,
 	VIEW_JOINING_LOBBY,
 	VIEW_COULDNT_JOIN_LOBBY,
+	VIEW_BUILD_DOESNT_SUPPORT_MULTIPLAYER,
 	VIEW_YOU_WIN,
 	VIEW_YOU_LOSE,
 	VIEW_DRAW,
@@ -32,6 +33,8 @@ u32 get_current_player_id(void)
 {
     return self_snake_index;
 }
+
+void message_and_button_loop(string msg, string btn, ViewID view);
 
 Rect calc_rect_for_horizontally_centered_text(string text, float text_h, float y)
 {
@@ -143,6 +146,8 @@ bool draw_menu(MenuEntry *entries, int num_entries, int *cursor)
 	return submit;
 }
 
+#if HAVE_MULTIPLAYER
+
 int num_players__ = -1;
 
 void game_setup_loop(void)
@@ -162,8 +167,6 @@ void game_setup_loop(void)
 		current_view = VIEW_CREATING_LOBBY;
 	}
 }
-
-void message_and_button_loop(string msg, string btn, ViewID view);
 
 void create_lobby_loop(void)
 {
@@ -198,88 +201,6 @@ void create_lobby_loop(void)
 		current_view = VIEW_COULDNT_CREATE_LOBBY;
 		break;
 	}
-}
-
-void main_menu_loop(void)
-{
-    static MenuEntry entries[] = {
-        {.text=LIT("PLAY")},
-        {.text=LIT("HOST")},
-        {.text=LIT("JOIN")},
-        {.text=LIT("EXIT")},
-    };
-
-    static int cursor = 0;
-
-    if (draw_menu(entries, COUNTOF(entries), &cursor)) {
-        switch (cursor) {
-            case 0:
-            input_queue_init();
-            init_game_state(&latest_game_state);
-            is_server = true;
-            multiplayer = false;
-            self_snake_index = 0;
-            spawn_snake(&latest_game_state);
-            current_view = VIEW_PLAY;
-            break;
-            case 1:
-			current_view = VIEW_GAME_SETUP;
-            break;
-            case 2:
-			steam_list_lobbies_owned_by_friends();
-			current_view = VIEW_LOADING_LOBBY_LIST;
-            break;
-            case 3:
-            window.should_close = true;
-            break;
-        }
-    }
-}
-
-void message_and_button_loop(string msg, string btn, ViewID view)
-{
-    int pad_y = 30;
-    int text_h = 40;
-
-    Gfx_Text_Metrics metrics;
-    
-    Rect msg_rect;
-    Rect btn_rect;
-
-    metrics = measure_text(font, msg, text_h, v2(1, 1));
-    msg_rect.w = metrics.visual_size.x;
-    msg_rect.h = metrics.visual_size.y;
-
-    metrics = measure_text(font, btn, text_h, v2(1, 1));
-    btn_rect.w = metrics.visual_size.x;
-    btn_rect.h = metrics.visual_size.y;
-
-    float total_h = msg_rect.h + btn_rect.h + pad_y;
-
-    msg_rect.x = (window.width  - msg_rect.w) / 2;
-    msg_rect.y = (window.height - total_h) / 2 + pad_y + text_h;
-
-    btn_rect.x = (window.width  - btn_rect.w) / 2;
-    btn_rect.y = (window.height - total_h) / 2;
-
-    draw_text(font, msg, text_h, v2(msg_rect.x, msg_rect.y), v2(1, 1), COLOR_BLACK);
-    draw_text(font, btn, text_h, v2(btn_rect.x, btn_rect.y), v2(1, 1), COLOR_RED);
-
-    if (is_key_just_pressed(KEY_SPACEBAR)) {
-        current_view = view;
-        play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
-    }
-
-    if (mouse_in_rect(padded_rect(btn_rect, 10))) {
-        if (is_key_just_pressed(MOUSE_BUTTON_LEFT)) {
-            current_view = view;
-            play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
-        }
-    }
-
-    target_menu_box = padded_rect(btn_rect, 10);
-
-    draw_rect_border(menu_box, 3, COLOR_BLACK);
 }
 
 void wait_for_players_loop(void)
@@ -365,84 +286,6 @@ void connecting_loop(void)
 			}
 		}
 		break;
-	}
-}
-
-u64 get_target_frame_index();
-u64 last_frame_index_received_from_server = -1;
-
-static float game_complete_time = -1;
-
-void play_loop(void)
-{
-    poll_for_inputs();
-
-	Input input;
-	SyncMessage sync = {.empty=true};
-
-    while (get_local_input(&input)) {
-        apply_input_to_game(input);
-        if (input.player == 0 && input.disconnect) {
-            current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
-			printf("Server disconnected unexpectedly while reading for inputs\n");
-            net_reset();
-            return;
-        }
-    }
-	if (multiplayer) {
-		if (is_server) {
-			while (get_client_input_from_network(&input)) {
-				printf("Client input is from %lld frames ago\n", (s64) get_current_frame_index() - (s64) input.time);
-				apply_input_to_game(input);
-				if (input.player == 0 && input.disconnect) {
-					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
-					printf("Server disconnected unexpectedly while reading for inputs\n");
-					net_reset();
-					return;
-				}
-			}
-		} else {
-			while (get_server_input_from_network(&input, &sync)) {
-				
-				if (input.player == 0) {
-					printf("Server input is from %lld frames ago (relative to target) and %lld frames ago relative to current\n", (s64) get_target_frame_index() - (s64) input.time, (s64) get_current_frame_index() - (s64) input.time);
-					last_frame_index_received_from_server = input.time;
-				}
-				apply_input_to_game(input);
-				if (input.player == 0 && input.disconnect) {
-					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
-					printf("Server disconnected unexpectedly while reading for inputs\n");
-					net_reset();
-					return;
-				}
-			}
-		}
-	}
-
-    update_game(sync);
-    draw_game();
-
-    if (game_apple_consumed_this_frame()) {
-        //play_one_audio_clip(STR("assets/sounds/mixkit-winning-a-coin-video-game-2069.wav"));
-    }
-
-    if (game_complete()) {
-		float current_time = os_get_current_time_in_seconds();
-		if (game_complete_time < 0)
-			game_complete_time = current_time;
-		else {
-			float elapsed_since_complete = current_time - game_complete_time;
-			if (elapsed_since_complete > 1) {
-				switch (game_result()) {
-					case GAME_RESULT_WIN: current_view = VIEW_YOU_WIN;   break;
-					case GAME_RESULT_LOSE: current_view = VIEW_YOU_LOSE; break;
-					case GAME_RESULT_DRAW: current_view = VIEW_DRAW;     break;
-				}
-		        net_reset();
-			}
-		}
-    } else {
-		game_complete_time = -1;
 	}
 }
 
@@ -532,10 +375,189 @@ void joining_lobby_loop(void)
 		break;
 	}
 }
+#endif /* HAVE_MULTIPLAYER */
+
+
+void main_menu_loop(void)
+{
+    static MenuEntry entries[] = {
+        {.text=LIT("PLAY")},
+        {.text=LIT("HOST")},
+        {.text=LIT("JOIN")},
+        {.text=LIT("EXIT")},
+    };
+
+    static int cursor = 0;
+
+    if (draw_menu(entries, COUNTOF(entries), &cursor)) {
+        switch (cursor) {
+            case 0: /* PLAY */
+            input_queue_init();
+            init_game_state(&latest_game_state);
+            is_server = true;
+            multiplayer = false;
+            self_snake_index = 0;
+            spawn_snake(&latest_game_state);
+            current_view = VIEW_PLAY;
+            break;
+            case 1: /* HOST */
+#if HAVE_MULTIPLAYER
+			current_view = VIEW_GAME_SETUP;
+#else
+			current_view = VIEW_BUILD_DOESNT_SUPPORT_MULTIPLAYER;
+#endif
+            break;
+            case 2: /* JOIN */
+#if HAVE_MULTIPLAYER
+			steam_list_lobbies_owned_by_friends();
+			current_view = VIEW_LOADING_LOBBY_LIST;
+#else
+			current_view = VIEW_BUILD_DOESNT_SUPPORT_MULTIPLAYER;
+#endif
+            break;
+            case 3: /* EXIT */
+            window.should_close = true;
+            break;
+        }
+    }
+}
+
+void message_and_button_loop(string msg, string btn, ViewID view)
+{
+    int pad_y = 30;
+    int text_h = 40;
+
+    Gfx_Text_Metrics metrics;
+    
+    Rect msg_rect;
+    Rect btn_rect;
+
+    metrics = measure_text(font, msg, text_h, v2(1, 1));
+    msg_rect.w = metrics.visual_size.x;
+    msg_rect.h = metrics.visual_size.y;
+
+    metrics = measure_text(font, btn, text_h, v2(1, 1));
+    btn_rect.w = metrics.visual_size.x;
+    btn_rect.h = metrics.visual_size.y;
+
+    float total_h = msg_rect.h + btn_rect.h + pad_y;
+
+    msg_rect.x = (window.width  - msg_rect.w) / 2;
+    msg_rect.y = (window.height - total_h) / 2 + pad_y + text_h;
+
+    btn_rect.x = (window.width  - btn_rect.w) / 2;
+    btn_rect.y = (window.height - total_h) / 2;
+
+    draw_text(font, msg, text_h, v2(msg_rect.x, msg_rect.y), v2(1, 1), COLOR_BLACK);
+    draw_text(font, btn, text_h, v2(btn_rect.x, btn_rect.y), v2(1, 1), COLOR_RED);
+
+    if (is_key_just_pressed(KEY_SPACEBAR)) {
+        current_view = view;
+        play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+    }
+
+    if (mouse_in_rect(padded_rect(btn_rect, 10))) {
+        if (is_key_just_pressed(MOUSE_BUTTON_LEFT)) {
+            current_view = view;
+            play_one_audio_clip(STR("assets/sounds/mixkit-player-jumping-in-a-video-game-2043.wav"));
+        }
+    }
+
+    target_menu_box = padded_rect(btn_rect, 10);
+
+    draw_rect_border(menu_box, 3, COLOR_BLACK);
+}
+
+u64 get_target_frame_index();
+u64 last_frame_index_received_from_server = -1;
+
+static float game_complete_time = -1;
+
+void play_loop(void)
+{
+    poll_for_inputs();
+
+	Input input;
+	SyncMessage sync = {.empty=true};
+
+    while (get_local_input(&input)) {
+        apply_input_to_game(input);
+#if HAVE_MULTIPLAYER
+        if (input.player == 0 && input.disconnect) {
+            current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+			printf("Server disconnected unexpectedly while reading for inputs\n");
+            net_reset();
+            return;
+        }
+#endif
+    }
+
+#if HAVE_MULTIPLAYER
+	if (multiplayer) {
+		if (is_server) {
+			while (get_client_input_from_network(&input)) {
+				printf("Client input is from %lld frames ago\n", (s64) get_current_frame_index() - (s64) input.time);
+				apply_input_to_game(input);
+				if (input.player == 0 && input.disconnect) {
+					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+					printf("Server disconnected unexpectedly while reading for inputs\n");
+					net_reset();
+					return;
+				}
+			}
+		} else {
+			while (get_server_input_from_network(&input, &sync)) {
+				
+				if (input.player == 0) {
+					printf("Server input is from %lld frames ago (relative to target) and %lld frames ago relative to current\n", (s64) get_target_frame_index() - (s64) input.time, (s64) get_current_frame_index() - (s64) input.time);
+					last_frame_index_received_from_server = input.time;
+				}
+				apply_input_to_game(input);
+				if (input.player == 0 && input.disconnect) {
+					current_view = VIEW_SERVER_DISCONNECTED_UNEXPECTEDLY;
+					printf("Server disconnected unexpectedly while reading for inputs\n");
+					net_reset();
+					return;
+				}
+			}
+		}
+	}
+#endif
+
+    update_game(sync);
+    draw_game();
+
+    if (game_apple_consumed_this_frame()) {
+        //play_one_audio_clip(STR("assets/sounds/mixkit-winning-a-coin-video-game-2069.wav"));
+    }
+
+    if (game_complete()) {
+		float current_time = os_get_current_time_in_seconds();
+		if (game_complete_time < 0)
+			game_complete_time = current_time;
+		else {
+			float elapsed_since_complete = current_time - game_complete_time;
+			if (elapsed_since_complete > 1) {
+				switch (game_result()) {
+					case GAME_RESULT_WIN: current_view = VIEW_YOU_WIN;   break;
+					case GAME_RESULT_LOSE: current_view = VIEW_YOU_LOSE; break;
+					case GAME_RESULT_DRAW: current_view = VIEW_DRAW;     break;
+				}
+#if HAVE_MULTIPLAYER
+		        net_reset();
+#endif
+			}
+		}
+    } else {
+		game_complete_time = -1;
+	}
+}
 
 void prelude(void)
 {
+#if HAVE_MULTIPLAYER
 	net_init();
+#endif
 }
 
 int entry(int argc, char **argv)
@@ -575,6 +597,16 @@ int entry(int argc, char **argv)
             case VIEW_MAIN_MENU:
             main_menu_loop();
             break;
+            
+            case VIEW_PLAY:
+            play_loop();
+            break;
+
+			case VIEW_BUILD_DOESNT_SUPPORT_MULTIPLAYER:
+			message_and_button_loop(STR("This build doesn't support multiplayer"), STR("MAIN MENU"), VIEW_MAIN_MENU);
+			break;
+
+#if HAVE_MULTIPLAYER
 
             case VIEW_WAITING_FOR_PLAYERS:
             wait_for_players_loop();
@@ -582,10 +614,6 @@ int entry(int argc, char **argv)
 
             case VIEW_CONNECTING:
             connecting_loop();
-            break;
-            
-            case VIEW_PLAY:
-            play_loop();
             break;
 
             case VIEW_COULDNT_CONNECT:
@@ -628,6 +656,8 @@ int entry(int argc, char **argv)
 			message_and_button_loop(STR("Couldn't join lobby"), STR("Main Menu"), VIEW_MAIN_MENU);
 			break;
 
+#endif /* HAVE_MULTIPLAYER*/
+
 			case VIEW_YOU_WIN:
 			message_and_button_loop(STR("YOU WIN"), STR("Main Menu"), VIEW_MAIN_MENU);
 			break;
@@ -638,6 +668,10 @@ int entry(int argc, char **argv)
 
 			case VIEW_DRAW:
 			message_and_button_loop(STR("DRAW"), STR("Main Menu"), VIEW_MAIN_MENU);
+			break;
+
+			default:
+			abort();
 			break;
         }
 
@@ -655,7 +689,10 @@ int entry(int argc, char **argv)
 		last_frame_time = elapsed;
     }
 
+#if HAVE_MULTIPLAYER
     net_free();
+#endif
+
     destroy_font(font);
 	return 0;
 }
