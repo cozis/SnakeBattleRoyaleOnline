@@ -351,11 +351,35 @@ bool game_apple_consumed_this_frame(void)
 
 bool game_complete(void)
 {
-    int final_snake_count = multiplayer ? 1 : 0;
-    return count_snakes(&latest_game_state) == final_snake_count;
+    return latest_game_state.game_complete;
 }
 
 void draw_game(void)
 {
     draw_game_instance(&latest_game_state);
+}
+
+typedef enum {
+	GAME_RESULT_NONE,
+	GAME_RESULT_WIN,
+	GAME_RESULT_LOSE,
+	GAME_RESULT_DRAW,
+} GameResult;
+
+GameResult game_result(void)
+{
+	GameState *game = &latest_game_state;
+	if (!game->game_complete)
+		return GAME_RESULT_NONE;
+
+	if (!multiplayer)
+		return GAME_RESULT_LOSE;
+
+	if (game->winner_when_multiplayer == -1)
+		return GAME_RESULT_DRAW;
+
+	if (game->winner_when_multiplayer == self_snake_index)
+		return GAME_RESULT_WIN;
+
+	return GAME_RESULT_LOSE;
 }

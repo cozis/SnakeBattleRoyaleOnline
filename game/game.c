@@ -26,21 +26,13 @@ typedef struct {
     u64 frame_index;
     u64 seed;
     bool apple_consumed_this_frame;
+	bool game_complete;
+	int  winner_when_multiplayer;
     Snake snakes[MAX_SNAKES];
     Apple apples[MAX_APPLES];
 } GameState;
 
 Gfx_Image *sprite_sheet;
-
-/*
- * FIXME: The way we avoid snakes changing direction to the one opposite
- *        to movement is to check that the new direction is not.. opposite
- *        to the movement. The problem is, players can change direction
- *        multiple times per frame with only the last one taking effect.
- *        This makes it possible to change from the current direction to
- *        and ortogonal one and then to the opposite direction to the initial
- *        one. This should not happen.
- */
 
 int count_snakes(GameState *game)
 {
@@ -55,6 +47,8 @@ void init_game_state(GameState *state)
 {
     state->seed = 1;
     state->frame_index = 0;
+	state->game_complete = false;
+	state->winner_when_multiplayer = -1;
     for (int i = 0; i < MAX_SNAKES; i++) state->snakes[i].used = false;
     for (int i = 0; i < MAX_APPLES; i++) state->apples[i].used = false;
 }
@@ -300,8 +294,12 @@ void apply_input_to_game_instance(GameState *game, Input input)
 
 void update_game_instance(GameState *game)
 {
+	if (game->game_complete)
+		return;
+
     game->apple_consumed_this_frame = false;
 
+	int first_alive_snake = -1;
     for (int i = 0; i < MAX_SNAKES; i++) {
 
         Snake *s = &game->snakes[i];
@@ -310,9 +308,20 @@ void update_game_instance(GameState *game)
         bool grow = move_snake_forwards(s, game->apples);
         if (grow) game->apple_consumed_this_frame = true;
 
-        if (snake_head_collided_with_someone_else(s, game))
-            s->used = false; // RIP
+        if (snake_head_collided_with_someone_else(s, game)) {
+			int alive_snakes = count_snakes(game);
+			int final_snake_count = multiplayer ? 1 : 0;
+			if (count_snakes(game) == final_snake_count+1)
+				game->game_complete = true;
+			else
+	            s->used = false; // RIP
+		} else {
+			first_alive_snake = i;
+		}
     }
+
+	if (game->game_complete)
+		game->winner_when_multiplayer = first_alive_snake;
 
     make_sure_there_is_at_least_this_amount_of_apples(game, 4);
     game->frame_index++;

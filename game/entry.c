@@ -21,6 +21,9 @@ typedef enum {
 	VIEW_COULDNT_LOAD_LOBBY_LIST,
 	VIEW_JOINING_LOBBY,
 	VIEW_COULDNT_JOIN_LOBBY,
+	VIEW_YOU_WIN,
+	VIEW_YOU_LOSE,
+	VIEW_DRAW,
 } ViewID;
 
 ViewID current_view = VIEW_MAIN_MENU;
@@ -368,6 +371,8 @@ void connecting_loop(void)
 u64 get_target_frame_index();
 u64 last_frame_index_received_from_server = -1;
 
+static float game_complete_time = -1;
+
 void play_loop(void)
 {
     poll_for_inputs();
@@ -422,10 +427,23 @@ void play_loop(void)
     }
 
     if (game_complete()) {
-        current_view = VIEW_MAIN_MENU;
-		printf("Game complete\n");
-        net_reset();
-    }
+		float current_time = os_get_current_time_in_seconds();
+		if (game_complete_time < 0)
+			game_complete_time = current_time;
+		else {
+			float elapsed_since_complete = current_time - game_complete_time;
+			if (elapsed_since_complete > 1) {
+				switch (game_result()) {
+					case GAME_RESULT_WIN: current_view = VIEW_YOU_WIN;   break;
+					case GAME_RESULT_LOSE: current_view = VIEW_YOU_LOSE; break;
+					case GAME_RESULT_DRAW: current_view = VIEW_DRAW;     break;
+				}
+		        net_reset();
+			}
+		}
+    } else {
+		game_complete_time = -1;
+	}
 }
 
 void load_lobby_list_loop(void)
@@ -608,6 +626,18 @@ int entry(int argc, char **argv)
 
 			case VIEW_COULDNT_JOIN_LOBBY:
 			message_and_button_loop(STR("Couldn't join lobby"), STR("Main Menu"), VIEW_MAIN_MENU);
+			break;
+
+			case VIEW_YOU_WIN:
+			message_and_button_loop(STR("YOU WIN"), STR("Main Menu"), VIEW_MAIN_MENU);
+			break;
+
+			case VIEW_YOU_LOSE:
+			message_and_button_loop(STR("YOU LOSE"), STR("Main Menu"), VIEW_MAIN_MENU);
+			break;
+
+			case VIEW_DRAW:
+			message_and_button_loop(STR("DRAW"), STR("Main Menu"), VIEW_MAIN_MENU);
 			break;
         }
 
