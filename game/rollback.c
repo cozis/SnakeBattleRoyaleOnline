@@ -123,14 +123,15 @@ void recalculate_latest_state(void)
 
 void apply_input_to_game(Input input)
 {
-    if (multiplayer) {
+    if (multiplayer)
 		input.time += INPUT_FRAME_DELAY_COUNT;
-        if (input.time < oldest_game_state.frame_index) {
-            printf("Input is too old\n");
-            abort();
-        }
-        input_queue_push(input);
+
+	if (input.time < oldest_game_state.frame_index) {
+    	printf("Input is too old\n");
+        abort();
     }
+    input_queue_push(input);
+
     if (input.time == latest_game_state.frame_index)
         apply_input_to_game_instance(&latest_game_state, input);
 }
@@ -145,6 +146,7 @@ void send_initial_state(void)
 {
 	game_start_time = steam_get_current_time_us();
 
+	input_globals_init();
 	init_game_state(&latest_game_state);
 	int num_players = 1 + count_client_handles();
 	for (int i = 0; i < num_players; i++)
@@ -212,6 +214,7 @@ void start_client_game(InitialGameStateMessage *initial)
 {
 	game_start_time = steam_get_current_time_us();
 
+	input_globals_init();
 	init_game_state(&latest_game_state);
 	for (int i = 0; i < initial->num_snakes; i++)
 		init_snake(&latest_game_state.snakes[i],
@@ -299,10 +302,10 @@ void update_game(SyncMessage sync)
 				last_target_update_time = current_time + (double) ping_time_us / 1000000;
 			}
 		}
-
-		recalculate_latest_state();
 	}
 #endif
+
+	recalculate_latest_state();
 
 	u64 target_frame_index = get_target_frame_index();
 

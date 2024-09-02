@@ -393,11 +393,13 @@ void main_menu_loop(void)
         switch (cursor) {
             case 0: /* PLAY */
             input_queue_init();
+			input_globals_init();
             init_game_state(&latest_game_state);
             is_server = true;
             multiplayer = false;
             self_snake_index = 0;
             spawn_snake(&latest_game_state);
+			memcpy(&oldest_game_state, &latest_game_state, sizeof(GameState));
             current_view = VIEW_PLAY;
             break;
             case 1: /* HOST */

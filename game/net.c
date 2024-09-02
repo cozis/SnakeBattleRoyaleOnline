@@ -504,6 +504,16 @@ bool up_press = false;
 bool down_press = false;
 bool left_press = false;
 bool right_press = false;
+u64 last_input_frame = 0;
+
+void input_globals_init(void)
+{
+	up_press = false;
+	down_press = false;
+	left_press = false;
+	right_press = false;
+	last_input_frame = 0;
+}
 
 void poll_for_inputs(void)
 {
@@ -520,53 +530,68 @@ void poll_for_inputs(void)
 
 bool get_local_input(Input *input)
 {
+	u64 input_time = get_current_frame_index();
+
+	if (input_time <= last_input_frame)
+		input_time = last_input_frame+1;
+
+	bool have_input = true;
+	string input_name = {};
+
     if (up_press) {
+
+		input_name = STR("UP");
         input->dir = DIR_UP;
         input->disconnect = false;
         input->player = get_current_player_id();
-        input->time = get_current_frame_index();
+        input->time = input_time;
         up_press = false;
-#if HAVE_MULTIPLAYER
-        if (multiplayer) send_local_input(*input);
-#endif
-        return true;
-    }
 
-    if (down_press) {
+    } else if (down_press) {
+
+		input_name = STR("DOWN");
         input->dir = DIR_DOWN;
         input->disconnect = false;
         input->player = get_current_player_id();
-        input->time = get_current_frame_index();
+        input->time = input_time;
         down_press = false;
-#if HAVE_MULTIPLAYER
-        if (multiplayer) send_local_input(*input);
-#endif
-        return true;
-    }
 
-    if (left_press) {
+    } else if (left_press) {
+
+		input_name = STR("LEFT");
         input->dir = DIR_LEFT;
         input->disconnect = false;
         input->player = get_current_player_id();
-        input->time = get_current_frame_index();
+        input->time = input_time;
         left_press = false;
-#if HAVE_MULTIPLAYER
-        if (multiplayer) send_local_input(*input);
-#endif
-        return true;
-    }
 
-    if (right_press) {
+    } else if (right_press) {
+
+		input_name = STR("RIGHT");
         input->dir = DIR_RIGHT;
         input->disconnect = false;
         input->player = get_current_player_id();
-        input->time = get_current_frame_index();
+        input->time = input_time;
         right_press = false;
-#if HAVE_MULTIPLAYER
-        if (multiplayer) send_local_input(*input);
-#endif
-        return true;
-    }
 
-    return false;
+    } else {
+		have_input = false;
+	}
+
+	if (have_input) {
+/*
+		if (last_input_frame == input_time)
+			printf("input frame %d (%s) -- AGAIN\n", input_time, input_name);
+		else
+			printf("input frame %d (%s)\n", input_time, input_name);
+*/
+		last_input_frame = input_time;
+	}
+
+#if HAVE_MULTIPLAYER
+	if (multiplayer && have_input)
+		send_local_input(*input);
+#endif
+
+    return have_input;
 }
